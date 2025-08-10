@@ -3,9 +3,9 @@ import random
 import string
 from functools import wraps
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes
-# --- اصلاحیه: وارد کردن ChatMemberStatus از مسیر درست ---
+from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes, CallbackQueryHandler
 from telegram.constants import ChatMemberStatus
+from telegram.error import BadRequest
 from config import (BOT_TOKEN, GROUP_ID, DB_NAME, DB_USER, DB_PASS, 
                     DB_HOST, DB_PORT, ORDER_TOPIC_ID, LOG_TOPIC_ID, ADMIN_IDS, FORCED_JOIN_CHANNELS)
 
@@ -47,31 +47,47 @@ def membership_required(func):
     @wraps(func)
     async def wrapper(self, update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
         user = update.effective_user
-        if not user or not FORCED_JOIN_CHANNELS: return await func(self, update, context, *args, **kwargs)
+        if not user or not FORCED_JOIN_CHANNELS: 
+            return await func(self, update, context, *args, **kwargs)
 
         channels_to_join = []
         for channel in FORCED_JOIN_CHANNELS:
             try:
                 member = await context.bot.get_chat_member(chat_id=channel, user_id=user.id)
-                # --- اصلاحیه: استفاده از ChatMemberStatus ---
-                if member.status not in [ChatMemberStatus.CREATOR, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.MEMBER]:
+                if member.status in [ChatMemberStatus.LEFT, ChatMemberStatus.KICKED]:
                     channels_to_join.append(channel)
-            except Exception:
+            except BadRequest as e:
+                if "user not found" in e.message.lower():
+                    channels_to_join.append(channel)
+                else:
+                    print(f"Bot might not be an admin in {channel}. Error: {e}")
+            except Exception as e:
+                print(f"Unexpected error checking membership for {channel}: {e}")
                 channels_to_join.append(channel)
         
         if channels_to_join:
             buttons = [[InlineKeyboardButton(f" عضویت در {channel.lstrip('@')}", url=f"https://t.me/{channel.lstrip('@')}")] for channel in channels_to_join]
             buttons.append([InlineKeyboardButton("✅ بررسی عضویت", callback_data="check_membership")])
             reply_markup = InlineKeyboardMarkup(buttons)
-            # اگر پیام از نوع callback_query (کلیک روی دکمه) بود، پیام را ویرایش کن
+            
+            text = "کاربر گرامی، برای استفاده از ربات لازم است ابتدا در کانال‌های زیر عضو شوید:"
+            
+            # اگر کاربر روی دکمه کلیک کرده بود و هنوز عضو نبود
             if update.callback_query:
-                await update.callback_query.edit_message_text("هنوز عضو تمام کانال‌ها نیستید. لطفاً عضو شوید و دوباره تلاش کنید:", reply_markup=reply_markup)
+                await update.callback_query.answer("شما هنوز در تمام کانال‌ها عضو نشده‌اید!", show_alert=True)
+                # برای جلوگیری از خطای "Message not modified"
+                try:
+                    await update.callback_query.edit_message_text(text, reply_markup=reply_markup)
+                except BadRequest as e:
+                    if not e.message.startswith("Message is not modified"):
+                        raise e
             else:
-                await update.message.reply_text("برای استفاده از ربات، لطفاً در کانال‌های زیر عضو شوید:", reply_markup=reply_markup)
+                await update.message.reply_text(text, reply_markup=reply_markup)
             return
 
         # اگر کاربر عضو بود و روی دکمه کلیک کرده بود، پیام قبلی را پاک کن و پیام جدید بفرست
         if update.callback_query:
+            await update.callback_query.answer("عضویت شما تایید شد!")
             await update.callback_query.delete_message()
         
         return await func(self, update, context, *args, **kwargs)
@@ -94,13 +110,11 @@ class AdvancedBot:
         if is_new_user and self.log_topic_id:
             username = f"@{user.username}" if user.username else "ندارد"
             log_message = (f"🎉 کاربر جدید\n\nنام: {user.first_name}\nنام کاربری: {username}\nآیدی: [{user.id}](tg://user?id={user.id})")
-            try:
-                await context.bot.send_message(chat_id=self.group_id, text=log_message, message_thread_id=self.log_topic_id, parse_mode='Markdown')
-            except Exception as e:
-                print(f"❌ Could not send new user log: {e}")
+            await context.bot.send_message(chat_id=self.group_id, text=log_message, message_thread_id=self.log_topic_id, parse_mode='Markdown')
         await update.message.reply_text("✅ خوش آمدید! شما عضو کانال‌های مورد نیاز هستید.\n\nمی‌توانید لینک خود را ارسال کنید.")
 
     async def manage_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        # ... (بدون تغییر) ...
         if update.effective_user.id not in self.admin_ids:
             await update.message.reply_text("access denied.")
             return
@@ -108,19 +122,18 @@ class AdvancedBot:
 
     @membership_required
     async def handle_url(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        # ... (بدون تغییر) ...
         user = update.effective_user
         self.db.add_user_if_not_exists(user)
         url = update.message.text.strip()
         code = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
         self.db.add_job(code, user.id, url)
         message_for_worker = f"⬇️ NEW JOB\nURL: {url}\nCODE: {code}\nUSER_ID: {user.id}"
-        try:
-            await context.bot.send_message(chat_id=self.group_id, text=message_for_worker, message_thread_id=self.order_topic_id)
-            await update.message.reply_text(f"✅ **درخواست ثبت شد!**\n\n🏷️ **کد پیگیری:** `{code}`", parse_mode='Markdown')
-        except Exception as e:
-            print(f"❌ Error sending job to order topic: {e}")
+        await context.bot.send_message(chat_id=self.group_id, text=message_for_worker, message_thread_id=self.order_topic_id)
+        await update.message.reply_text(f"✅ **درخواست ثبت شد!**\n\n🏷️ **کد پیگیری:** `{code}`", parse_mode='Markdown')
 
     async def handle_group_files(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        # ... (بدون تغییر) ...
         if not update.message or update.message.message_thread_id != self.order_topic_id or "CODE:" not in update.message.caption: return
         try:
             code = update.message.caption.split("CODE:")[1].strip()
@@ -137,15 +150,12 @@ class AdvancedBot:
         except Exception as e:
             print(f"❌ Error sending file to user: {e}")
     
-    @membership_required
     async def check_membership_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        # بعد از اینکه کاربر روی دکمه کلیک کرد، تابع start_command دوباره چک می‌کند
-        # اگر عضو شده باشد، پیام خوشامدگویی را دریافت می‌کند
-        await self.start_command(query.message, context)
+        # حالا دکوراتور خودش همه کارها را انجام می‌دهد
+        await self.start_command(update, context)
 
     def run(self):
-        from telegram.ext import CallbackQueryHandler
+        # ... (بقیه بدون تغییر) ...
         self.app.add_handler(CommandHandler("start", self.start_command))
         self.app.add_handler(CommandHandler("manage", self.manage_command))
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_url))
