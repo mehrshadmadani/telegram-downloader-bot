@@ -1,0 +1,25 @@
+# --- Environments ---
+.env
+.venv
+env/
+venv/
+ENV/
+
+# --- Python cache ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# --- Configuration / Secrets ---
+config.json
+*.ini
+*.session
+
+# --- IDE / Editor specific ---
+.idea/
+.vscode/
+
+# --- Other ---
+downloads/
+*.log
