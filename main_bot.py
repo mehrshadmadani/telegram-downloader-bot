@@ -4,7 +4,8 @@ import string
 from functools import wraps
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes
-from telegram.constants import ChatMember
+# --- اصلاحیه: وارد کردن ChatMemberStatus از مسیر درست ---
+from telegram.constants import ChatMemberStatus
 from config import (BOT_TOKEN, GROUP_ID, DB_NAME, DB_USER, DB_PASS, 
                     DB_HOST, DB_PORT, ORDER_TOPIC_ID, LOG_TOPIC_ID, ADMIN_IDS, FORCED_JOIN_CHANNELS)
 
@@ -46,33 +47,33 @@ def membership_required(func):
     @wraps(func)
     async def wrapper(self, update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
         user = update.effective_user
-        if not user: return
+        if not user or not FORCED_JOIN_CHANNELS: return await func(self, update, context, *args, **kwargs)
 
         channels_to_join = []
         for channel in FORCED_JOIN_CHANNELS:
             try:
                 member = await context.bot.get_chat_member(chat_id=channel, user_id=user.id)
-                if member.status not in [ChatMember.CREATOR, ChatMember.ADMINISTRATOR, ChatMember.MEMBER]:
+                # --- اصلاحیه: استفاده از ChatMemberStatus ---
+                if member.status not in [ChatMemberStatus.CREATOR, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.MEMBER]:
                     channels_to_join.append(channel)
             except Exception:
                 channels_to_join.append(channel)
         
         if channels_to_join:
-            buttons = []
-            for i, channel_username in enumerate(channels_to_join):
-                url = f"https://t.me/{channel_username.lstrip('@')}"
-                buttons.append([InlineKeyboardButton(f" عضویت در کانال {i+1}", url=url)])
-            
-            # اضافه کردن دکمه "بررسی عضویت"
+            buttons = [[InlineKeyboardButton(f" عضویت در {channel.lstrip('@')}", url=f"https://t.me/{channel.lstrip('@')}")] for channel in channels_to_join]
             buttons.append([InlineKeyboardButton("✅ بررسی عضویت", callback_data="check_membership")])
-            
             reply_markup = InlineKeyboardMarkup(buttons)
-            await update.message.reply_text(
-                "کاربر گرامی، برای استفاده از ربات لازم است ابتدا در کانال‌های زیر عضو شوید و سپس دکمه بررسی عضویت را بزنید:",
-                reply_markup=reply_markup
-            )
+            # اگر پیام از نوع callback_query (کلیک روی دکمه) بود، پیام را ویرایش کن
+            if update.callback_query:
+                await update.callback_query.edit_message_text("هنوز عضو تمام کانال‌ها نیستید. لطفاً عضو شوید و دوباره تلاش کنید:", reply_markup=reply_markup)
+            else:
+                await update.message.reply_text("برای استفاده از ربات، لطفاً در کانال‌های زیر عضو شوید:", reply_markup=reply_markup)
             return
 
+        # اگر کاربر عضو بود و روی دکمه کلیک کرده بود، پیام قبلی را پاک کن و پیام جدید بفرست
+        if update.callback_query:
+            await update.callback_query.delete_message()
+        
         return await func(self, update, context, *args, **kwargs)
     return wrapper
 
@@ -97,11 +98,10 @@ class AdvancedBot:
                 await context.bot.send_message(chat_id=self.group_id, text=log_message, message_thread_id=self.log_topic_id, parse_mode='Markdown')
             except Exception as e:
                 print(f"❌ Could not send new user log: {e}")
-        await update.message.reply_text("🚀 **ربات دانلودر**\n\n✅ شما عضو کانال هستید. لینک خود را ارسال کنید.")
+        await update.message.reply_text("✅ خوش آمدید! شما عضو کانال‌های مورد نیاز هستید.\n\nمی‌توانید لینک خود را ارسال کنید.")
 
     async def manage_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user = update.effective_user
-        if user.id not in self.admin_ids:
+        if update.effective_user.id not in self.admin_ids:
             await update.message.reply_text("access denied.")
             return
         await update.message.reply_text("🔐 به پنل مدیریت خوش آمدید.")
@@ -121,8 +121,7 @@ class AdvancedBot:
             print(f"❌ Error sending job to order topic: {e}")
 
     async def handle_group_files(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not update.message or update.message.message_thread_id != self.order_topic_id or "CODE:" not in update.message.caption:
-            return
+        if not update.message or update.message.message_thread_id != self.order_topic_id or "CODE:" not in update.message.caption: return
         try:
             code = update.message.caption.split("CODE:")[1].strip()
             user_id = self.db.get_user_by_code(code)
@@ -130,18 +129,20 @@ class AdvancedBot:
             caption = "🎉 **دانلود شما آماده‌ست!**"
             if update.message.video:
                 await context.bot.send_video(chat_id=user_id, video=update.message.video.file_id, caption=caption, parse_mode='Markdown')
-            elif update.message.document:
+            elif update.message.document and ('video' in update.message.document.mime_type or update.message.document.file_name.endswith(('.mp4', '.mkv'))):
                 await context.bot.send_video(chat_id=user_id, video=update.message.document.file_id, caption=caption, parse_mode='Markdown')
+            elif update.message.document:
+                await context.bot.send_document(chat_id=user_id, document=update.message.document.file_id, caption=caption, parse_mode='Markdown')
             self.db.update_job_status(code, 'completed')
         except Exception as e:
             print(f"❌ Error sending file to user: {e}")
     
+    @membership_required
     async def check_membership_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
-        await query.answer("در حال بررسی عضویت شما...")
-        # دستور استارت را دوباره صدا می‌زنیم تا عضویت چک شود و پیام مناسب نمایش داده شود
+        # بعد از اینکه کاربر روی دکمه کلیک کرد، تابع start_command دوباره چک می‌کند
+        # اگر عضو شده باشد، پیام خوشامدگویی را دریافت می‌کند
         await self.start_command(query.message, context)
-
 
     def run(self):
         from telegram.ext import CallbackQueryHandler
