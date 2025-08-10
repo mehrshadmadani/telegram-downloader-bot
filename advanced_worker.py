@@ -6,8 +6,10 @@ import yt_dlp
 from telethon import TelegramClient
 from config import TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_PHONE
 
-# ... (بخش لاگ و کلاس TelethonWorker بدون تغییر اینجا قرار میگیرد) ...
-# فقط تابع run تغییر کرده است
+# --- دو خط زیر برای تعریف logger اضافه شده است ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
 class TelethonWorker:
     def __init__(self, api_id, api_hash, phone):
         self.app = TelegramClient("telethon_session", api_id, api_hash)
@@ -17,6 +19,7 @@ class TelethonWorker:
         self.processed_ids = set()
         self.start_time = datetime.now(timezone.utc)
         self.active_jobs = {}
+
     def download_media(self, url, code, user_id):
         self.active_jobs[code] = {"user_id": user_id, "status": "Downloading..."}
         output_path = os.path.join(self.download_dir, f"{code} - %(title).30s.%(ext)s")
@@ -36,11 +39,13 @@ class TelethonWorker:
         except Exception:
             self.active_jobs[code]["status"] = "Download Failed"
             return None
+
     async def upload_progress(self, sent_bytes, total_bytes, code):
         percentage = int(sent_bytes * 100 / total_bytes)
         if percentage % 10 == 0 or percentage == 100:
             if code in self.active_jobs:
                 self.active_jobs[code]["status"] = f"Uploading: {percentage}%"
+
     async def process_job(self, message):
         if message.id in self.processed_ids: return
         self.processed_ids.add(message.id)
@@ -55,7 +60,7 @@ class TelethonWorker:
             try:
                 await self.app.send_file(
                     message.chat_id, file_path, caption=f"✅ Uploaded\nCODE: {code}",
-                    reply_to=message.id, # پاسخ به پیام جاب برای ماندن در همان تاپیک
+                    reply_to=message.id,
                     progress_callback=lambda s, t: self.upload_progress(s, t, code)
                 )
                 self.active_jobs[code]["status"] = "Completed"
@@ -63,6 +68,7 @@ class TelethonWorker:
                 self.active_jobs[code]["status"] = "Upload Failed"
             finally:
                 if os.path.exists(file_path): os.remove(file_path)
+
     async def display_dashboard(self):
         while True:
             os.system('clear' if os.name == 'posix' else 'cls')
@@ -75,7 +81,7 @@ class TelethonWorker:
                 for code, data in list(self.active_jobs.items()):
                     print(f"{code:<12} | {data.get('user_id', 'N/A'):<12} | {data.get('status', 'N/A'):<20}")
                     if data.get('status') in ["Completed", "Download Failed", "Upload Failed"]:
-                        await asyncio.sleep(3) # نمایش وضعیت نهایی برای ۳ ثانیه
+                        await asyncio.sleep(3)
                         self.active_jobs.pop(code, None)
             print("-" * 50)
             print(f"Last Update: {datetime.now().strftime('%H:%M:%S')}")
@@ -87,7 +93,6 @@ class TelethonWorker:
         logger.info(f"Worker (Topics Version) ba movaffaghiat be onvane {me.first_name} vared shod.")
         
         target_chat_id = int(input("Lotfan adad Group ID ra vared konid: "))
-        # --- تغییر جدید: پرسیدن آیدی تاپیک سفارشات ---
         target_topic_id = int(input("Lotfan adad Topic ID (Order) ra vared konid: "))
 
         try:
@@ -100,7 +105,6 @@ class TelethonWorker:
         logger.info(f"Worker shoroo be check kardan Topic ID {target_topic_id} kard...")
         while True:
             try:
-                # --- تغییر جدید: جستجو فقط در تاپیک سفارشات ---
                 async for message in self.app.iter_messages(entity=entity, reply_to=target_topic_id, limit=20):
                     if message.date < self.start_time: break
                     if message.text and "⬇️ NEW JOB" in message.text:
