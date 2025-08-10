@@ -12,7 +12,6 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # --- کلاس ورکر نهایی ---
-# اسم کلاس اینجا اصلاح شد
 class TelethonWorker:
     def __init__(self, api_id, api_hash, phone):
         self.app = TelegramClient("telethon_session", api_id, api_hash)
@@ -20,21 +19,19 @@ class TelethonWorker:
         self.download_dir = "downloads"
         os.makedirs(self.download_dir, exist_ok=True)
         self.processed_ids = set()
-        # زمان شروع به کار اسکریپت برای نادیده گرفتن پیام‌های قدیمی
         self.start_time = datetime.now(timezone.utc)
 
     def download_media(self, url, code):
         logger.info(f"Shروع download baraye CODE: {code}")
         output_path = os.path.join(self.download_dir, f"{code} - %(title).30s.%(ext)s")
         
-        # بهینه‌سازی: تنظیمات جداگانه برای اینستاگرام
         if "instagram.com" in url:
             ydl_opts = {
                 'outtmpl': output_path,
                 'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None,
                 'ignoreerrors': True, 'quiet': True, 'no_warnings': True,
             }
-        else: # تنظیمات برای یوتیوب و بقیه
+        else:
             ydl_opts = {
                 'outtmpl': output_path,
                 'format': 'bestvideo[height<=720]+bestaudio/best[height<=720]/best',
@@ -75,4 +72,21 @@ class TelethonWorker:
         file_path = await asyncio.to_thread(self.download_media, url, code)
         
         if file_path and os.path.exists(file_path):
-            logger.info(f"Opload shoroo shod baraye CODE:
+            logger.info(f"Opload shoroo shod baraye CODE: {code}")
+            try:
+                await self.app.send_file(
+                    message.chat_id, file_path, caption=f"✅ Uploaded\nCODE: {code}",
+                    progress_callback=lambda s, t: self.upload_progress(s, t, code)
+                )
+                logger.info(f"✅ Upload KAMEL shod baraye CODE: {code}")
+            except Exception as e:
+                logger.error(f"Khata dar upload (CODE: {code}): {e}")
+            finally:
+                if os.path.exists(file_path): os.remove(file_path)
+        else:
+            logger.error(f"Download namovaffagh bood baraye CODE: {code}. File peyda nashod.")
+
+    async def run(self):
+        await self.app.start(phone=self.phone)
+        me = await self.app.get_me()
+        logger.info(f"Worker (Telethon Version) ba movaffaghiat be on
