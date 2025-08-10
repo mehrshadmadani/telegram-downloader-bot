@@ -1,5 +1,5 @@
 import psycopg2
-import random  # این خط اضافه شده است
+import random
 import string
 from functools import wraps
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -9,7 +9,6 @@ from telegram.error import BadRequest
 from config import (BOT_TOKEN, GROUP_ID, DB_NAME, DB_USER, DB_PASS, 
                     DB_HOST, DB_PORT, ORDER_TOPIC_ID, LOG_TOPIC_ID, ADMIN_IDS, FORCED_JOIN_CHANNELS)
 
-# ... (کلاس PostgresDB بدون هیچ تغییری اینجا قرار میگیرد) ...
 class PostgresDB:
     def __init__(self):
         self.conn_params = {"dbname": DB_NAME, "user": DB_USER, "password": DB_PASS, "host": DB_HOST, "port": DB_PORT}
