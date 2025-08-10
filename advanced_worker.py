@@ -1,24 +1,17 @@
-# ... (تمام بخش‌های بالای فایل بدون تغییر باقی می‌مانند) ...
+# ... (تمام بخش‌های بالای فایل تا کلاس TelethonWorker بدون تغییر) ...
 import os, asyncio, logging, json, subprocess
 from datetime import datetime, timezone
 import yt_dlp
 from telethon import TelegramClient
 from telethon.tl.types import DocumentAttributeVideo
 from config import TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_PHONE, GROUP_ID, ORDER_TOPIC_ID
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s'); logger = logging.getLogger(__name__)
 
 class TelethonWorker:
-    # ... (توابع __init__, get_video_metadata, download_media, upload_progress بدون تغییر) ...
     def __init__(self, api_id, api_hash, phone):
-        self.app = TelegramClient("telethon_session", api_id, api_hash)
-        self.phone = phone
-        self.download_dir = "downloads"
-        os.makedirs(self.download_dir, exist_ok=True)
-        self.processed_ids = set()
-        self.start_time = datetime.now(timezone.utc)
-        self.active_jobs = {}
+        self.app = TelegramClient("telethon_session", api_id, api_hash); self.phone = phone
+        self.download_dir = "downloads"; os.makedirs(self.download_dir, exist_ok=True)
+        self.processed_ids = set(); self.start_time = datetime.now(timezone.utc); self.active_jobs = {}
     def get_video_metadata(self, file_path):
         try:
             command = ['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height,duration', '-of', 'json', file_path]
@@ -26,21 +19,29 @@ class TelethonWorker:
             data = json.loads(result.stdout)['streams'][0]
             return {'duration': int(float(data['duration'])), 'width': int(data['width']), 'height': int(data['height'])}
         except: return None
+        
     def download_media(self, url, code, user_id):
         self.active_jobs[code] = {"user_id": user_id, "status": "Downloading..."}
         output_path = os.path.join(self.download_dir, f"{code} - %(title).30s.%(ext)s")
-        if "instagram.com" in url: ydl_opts = {'outtmpl': output_path, 'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None, 'ignoreerrors': True, 'quiet': True, 'no_warnings': True}
-        else: ydl_opts = {'outtmpl': output_path, 'format': 'bestvideo[height<=720]+bestaudio/best[height<=720]/best', 'merge_output_format': 'mp4', 'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None, 'ignoreerrors': True, 'quiet': True, 'no_warnings': True}
+        
+        # --- تنظیمات بهبود یافته برای پلتفرم‌های مختلف ---
+        if "instagram.com" in url:
+            ydl_opts = {'outtmpl': output_path, 'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None, 'ignoreerrors': True, 'quiet': True, 'no_warnings': True}
+        elif "soundcloud.com" in url or "spotify.com" in url:
+            ydl_opts = {'outtmpl': output_path, 'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None, 'ignoreerrors': True, 'quiet': True, 'no_warnings': True, 'format': 'bestaudio/best', 'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '192'}]}
+        else:
+            ydl_opts = {'outtmpl': output_path, 'format': 'bestvideo[height<=720]+bestaudio/best[height<=720]/best', 'merge_output_format': 'mp4', 'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None, 'ignoreerrors': True, 'quiet': True, 'no_warnings': True}
+            
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.extract_info(url, download=True)
                 for f in os.listdir(self.download_dir):
                     if f.startswith(code):
                         downloaded_file = os.path.join(self.download_dir, f)
-                        self.active_jobs[code]["status"] = "Downloaded"
-                        return downloaded_file
+                        self.active_jobs[code]["status"] = "Downloaded"; return downloaded_file
             return None
         except: self.active_jobs[code]["status"] = "Download Failed"; return None
+
     async def upload_progress(self, sent_bytes, total_bytes, code):
         percentage = int(sent_bytes * 100 / total_bytes)
         if percentage % 10 == 0 or percentage == 100:
@@ -54,20 +55,18 @@ class TelethonWorker:
             url = next(line.replace("URL:", "").strip() for line in lines if line.startswith("URL:"))
             code = next(line.replace("CODE:", "").strip() for line in lines if line.startswith("CODE:"))
             user_id = int(next(line.replace("USER_ID:", "").strip() for line in lines if line.startswith("USER_ID:")))
-        except Exception: return
+        except: return
         
         file_path = await asyncio.to_thread(self.download_media, url, code, user_id)
         
         if file_path and os.path.exists(file_path):
-            file_size = os.path.getsize(file_path) # گرفتن حجم فایل
+            file_size = os.path.getsize(file_path)
             upload_attributes = []
             if file_path.lower().endswith(('.mp4', '.mkv', '.mov')):
                 metadata = self.get_video_metadata(file_path)
-                if metadata:
-                    upload_attributes.append(DocumentAttributeVideo(duration=metadata['duration'], w=metadata['width'], h=metadata['height'], supports_streaming=True))
+                if metadata: upload_attributes.append(DocumentAttributeVideo(duration=metadata['duration'], w=metadata['width'], h=metadata['height'], supports_streaming=True))
             
             try:
-                # --- تغییر کلیدی: اضافه کردن حجم فایل به کپشن ---
                 caption = f"✅ Uploaded\nCODE: {code}\nSIZE: {file_size}"
                 await self.app.send_file(
                     message.chat_id, file_path, caption=caption,
@@ -75,17 +74,15 @@ class TelethonWorker:
                     progress_callback=lambda s, t: self.upload_progress(s, t, code)
                 )
                 self.active_jobs[code]["status"] = "Completed"
-            except Exception as e: self.active_jobs[code]["status"] = "Upload Failed"
+            except: self.active_jobs[code]["status"] = "Upload Failed"
             finally:
                 if os.path.exists(file_path): os.remove(file_path)
 
-    # ... (توابع display_dashboard و run و main بدون تغییر) ...
     async def display_dashboard(self):
+        # ... (بدون تغییر) ...
         while True:
-            os.system('clear' if os.name == 'posix' else 'cls')
-            print("--- 🚀 Advanced Downloader Dashboard 🚀 ---")
-            print(f"{'Job Code':<12} | {'User ID':<12} | {'Status':<20}")
-            print("-" * 50)
+            os.system('clear' if os.name == 'posix' else 'cls'); print("--- 🚀 Advanced Downloader Dashboard 🚀 ---")
+            print(f"{'Job Code':<12} | {'User ID':<12} | {'Status':<20}"); print("-" * 50)
             if not self.active_jobs: print("... Waiting for new jobs ...")
             else:
                 for code, data in list(self.active_jobs.items()):
@@ -93,6 +90,7 @@ class TelethonWorker:
                     if data.get('status') in ["Completed", "Download Failed", "Upload Failed"]:
                         await asyncio.sleep(3); self.active_jobs.pop(code, None)
             print("-" * 50); print(f"Last Update: {datetime.now().strftime('%H:%M:%S')}"); await asyncio.sleep(1)
+
     async def run(self):
         await self.app.start(phone=self.phone)
         me = await self.app.get_me()
