@@ -1,9 +1,12 @@
 import psycopg2
 import random
 import string
-from telegram import Update
+from functools import wraps
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes
-from config import BOT_TOKEN, GROUP_ID, DB_NAME, DB_USER, DB_PASS, DB_HOST, DB_PORT, ORDER_TOPIC_ID, LOG_TOPIC_ID
+from telegram.constants import ChatMember
+from config import (BOT_TOKEN, GROUP_ID, DB_NAME, DB_USER, DB_PASS, 
+                    DB_HOST, DB_PORT, ORDER_TOPIC_ID, LOG_TOPIC_ID, ADMIN_IDS, FORCED_JOIN_CHANNELS)
 
 # ... (کلاس PostgresDB بدون هیچ تغییری اینجا قرار میگیرد) ...
 class PostgresDB:
@@ -38,36 +41,77 @@ class PostgresDB:
             with conn.cursor() as cur:
                 cur.execute("UPDATE jobs SET status = %s, completed_at = NOW() WHERE code = %s;", (status, code))
 
+# --- دکوراتور برای چک کردن جوین اجباری ---
+def membership_required(func):
+    @wraps(func)
+    async def wrapper(self, update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+        user = update.effective_user
+        if not user: return
+
+        channels_to_join = []
+        for channel in FORCED_JOIN_CHANNELS:
+            try:
+                member = await context.bot.get_chat_member(chat_id=channel, user_id=user.id)
+                if member.status not in [ChatMember.CREATOR, ChatMember.ADMINISTRATOR, ChatMember.MEMBER]:
+                    channels_to_join.append(channel)
+            except Exception:
+                channels_to_join.append(channel)
+        
+        if channels_to_join:
+            buttons = []
+            for i, channel_username in enumerate(channels_to_join):
+                url = f"https://t.me/{channel_username.lstrip('@')}"
+                buttons.append([InlineKeyboardButton(f" عضویت در کانال {i+1}", url=url)])
+            
+            # اضافه کردن دکمه "بررسی عضویت"
+            buttons.append([InlineKeyboardButton("✅ بررسی عضویت", callback_data="check_membership")])
+            
+            reply_markup = InlineKeyboardMarkup(buttons)
+            await update.message.reply_text(
+                "کاربر گرامی، برای استفاده از ربات لازم است ابتدا در کانال‌های زیر عضو شوید و سپس دکمه بررسی عضویت را بزنید:",
+                reply_markup=reply_markup
+            )
+            return
+
+        return await func(self, update, context, *args, **kwargs)
+    return wrapper
+
 class AdvancedBot:
-    def __init__(self, token, group_id, order_topic_id, log_topic_id):
+    def __init__(self, token, group_id, order_topic_id, log_topic_id, admin_ids):
         self.token = token
         self.group_id = int(group_id)
         self.order_topic_id = int(order_topic_id)
         self.log_topic_id = int(log_topic_id)
+        self.admin_ids = admin_ids
         self.db = PostgresDB()
         self.app = Application.builder().token(self.token).build()
 
-    def generate_code(self):
-        return ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
-
+    @membership_required
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
         is_new_user = self.db.add_user_if_not_exists(user)
-        if is_new_user:
+        if is_new_user and self.log_topic_id:
             username = f"@{user.username}" if user.username else "ندارد"
-            log_message = (f"🎉 کاربر جدید\n\nنام : {user.first_name}\nنام کاربری : {username}\nآیدی عددی : [{user.id}](tg://user?id={user.id})")
+            log_message = (f"🎉 کاربر جدید\n\nنام: {user.first_name}\nنام کاربری: {username}\nآیدی: [{user.id}](tg://user?id={user.id})")
             try:
-                if self.log_topic_id:
-                    await context.bot.send_message(chat_id=self.group_id, text=log_message, message_thread_id=self.log_topic_id, parse_mode='Markdown')
+                await context.bot.send_message(chat_id=self.group_id, text=log_message, message_thread_id=self.log_topic_id, parse_mode='Markdown')
             except Exception as e:
                 print(f"❌ Could not send new user log: {e}")
-        await update.message.reply_text("🚀 **ربات دانلودر**\n\nلینک خود را ارسال کنید.")
+        await update.message.reply_text("🚀 **ربات دانلودر**\n\n✅ شما عضو کانال هستید. لینک خود را ارسال کنید.")
 
+    async def manage_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user = update.effective_user
+        if user.id not in self.admin_ids:
+            await update.message.reply_text("access denied.")
+            return
+        await update.message.reply_text("🔐 به پنل مدیریت خوش آمدید.")
+
+    @membership_required
     async def handle_url(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
         self.db.add_user_if_not_exists(user)
         url = update.message.text.strip()
-        code = self.generate_code()
+        code = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
         self.db.add_job(code, user.id, url)
         message_for_worker = f"⬇️ NEW JOB\nURL: {url}\nCODE: {code}\nUSER_ID: {user.id}"
         try:
@@ -83,31 +127,36 @@ class AdvancedBot:
             code = update.message.caption.split("CODE:")[1].strip()
             user_id = self.db.get_user_by_code(code)
             if not user_id: return
-            
             caption = "🎉 **دانلود شما آماده‌ست!**"
-            
-            # --- منطق هوشمند ارسال ویدیو ---
             if update.message.video:
-                # اگر تلگرام خودش تشخیص داده ویدیو است
                 await context.bot.send_video(chat_id=user_id, video=update.message.video.file_id, caption=caption, parse_mode='Markdown')
-            elif update.message.document and ('video' in update.message.document.mime_type or update.message.document.file_name.endswith(('.mp4', '.mkv', '.mov'))):
-                # اگر تلگرام گفته داکیومنت است، ولی ما می‌دانیم ویدیو است
-                await context.bot.send_video(chat_id=user_id, video=update.message.document.file_id, caption=caption, parse_mode='Markdown')
             elif update.message.document:
-                # اگر داکیومنت غیر ویدیویی است
-                await context.bot.send_document(chat_id=user_id, document=update.message.document.file_id, caption=caption, parse_mode='Markdown')
-            
+                await context.bot.send_video(chat_id=user_id, video=update.message.document.file_id, caption=caption, parse_mode='Markdown')
             self.db.update_job_status(code, 'completed')
         except Exception as e:
             print(f"❌ Error sending file to user: {e}")
+    
+    async def check_membership_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer("در حال بررسی عضویت شما...")
+        # دستور استارت را دوباره صدا می‌زنیم تا عضویت چک شود و پیام مناسب نمایش داده شود
+        await self.start_command(query.message, context)
+
 
     def run(self):
+        from telegram.ext import CallbackQueryHandler
         self.app.add_handler(CommandHandler("start", self.start_command))
+        self.app.add_handler(CommandHandler("manage", self.manage_command))
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_url))
         self.app.add_handler(MessageHandler((filters.VIDEO | filters.Document.ALL) & filters.Chat(self.group_id) & filters.CAPTION, self.handle_group_files))
-        print("🚀 Bot is running with PostgreSQL and Topics...")
+        self.app.add_handler(CallbackQueryHandler(self.check_membership_callback, pattern="^check_membership$"))
+        print("🚀 Bot is running with Forced Join...")
         self.app.run_polling()
         
 if __name__ == "__main__":
-    bot = AdvancedBot(token=BOT_TOKEN, group_id=GROUP_ID, order_topic_id=ORDER_TOPIC_ID, log_topic_id=LOG_TOPIC_ID)
+    bot = AdvancedBot(
+        token=BOT_TOKEN, group_id=GROUP_ID, 
+        order_topic_id=ORDER_TOPIC_ID, log_topic_id=LOG_TOPIC_ID,
+        admin_ids=ADMIN_IDS
+    )
     bot.run()
