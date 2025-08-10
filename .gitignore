@@ -1,25 +1,19 @@
-# --- Environments ---
-.env
-.venv
-env/
+# Python virtual environment & cache
 venv/
-ENV/
-
-# --- Python cache ---
 __pycache__/
 *.pyc
-*.pyo
-*.pyd
 
-# --- Configuration / Secrets ---
-config.json
-*.ini
+# Telegram Session Files
 *.session
+*.session-journal
 
-# --- IDE / Editor specific ---
-.idea/
-.vscode/
+# Database
+*.db
+*.db-journal
 
-# --- Other ---
+# Downloaded files & backups
 downloads/
-*.log
+backups/
+
+# Sensitive files
+cookies.txt
