@@ -89,4 +89,45 @@ class TelethonWorker:
     async def run(self):
         await self.app.start(phone=self.phone)
         me = await self.app.get_me()
-        logger.info(f"Worker (Telethon Version) ba movaffaghiat be on
+        logger.info(f"Worker (Telethon Version) ba movaffaghiat be onvane {me.first_name} vared shod.")
+
+        logger.info("Cache garm mishavad, dar hale gereftan list-e chat-ha...")
+        try:
+            async for _ in self.app.get_dialogs():
+                pass
+            logger.info("Cache garm shod.")
+        except Exception as e:
+            logger.warning(f"Khata dar gereftan dialog-ha: {e}")
+
+        target_chat_id = int(input("Lotfan adad Group ID ra vared konid: "))
+        
+        try:
+            entity = await self.app.get_entity(target_chat_id)
+            logger.info(f"Dastresi be Group '{entity.title}' ba movaffaghiat anjam shod.")
+        except Exception as e:
+            logger.critical(f"Nemitavan be Group ID {target_chat_id} dastresi peyda kard. Khata: {e}")
+            return
+
+        logger.info(f"Worker shoroo be check kardan payamha kard...")
+        while True:
+            try:
+                async for message in self.app.iter_messages(entity=entity, limit=20):
+                    if message.date < self.start_time:
+                        break
+                    
+                    if message.text and "⬇️ NEW JOB" in message.text:
+                        await self.process_job(message)
+                await asyncio.sleep(10)
+            except Exception as e:
+                logger.error(f"Yek khata dar halghe asli rokh dad: {e}")
+                await asyncio.sleep(30)
+
+async def main():
+    worker = TelethonWorker(
+        api_id=TELEGRAM_API_ID, api_hash=TELEGRAM_API_HASH, phone=TELEGRAM_PHONE
+    )
+    await worker.run()
+
+if __name__ == "__main__":
+    print("--- Rah andazi Final Worker (Telethon) ---")
+    asyncio.run(main())
