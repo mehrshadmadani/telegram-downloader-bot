@@ -42,7 +42,7 @@ class FinalWorker:
 
     async def upload_progress(self, current, total, code):
         percentage = int(current * 100 / total)
-        if percentage % 10 == 0:
+        if percentage % 10 == 0 or percentage == 100:
             logger.info(f"Uploading CODE {code}: {percentage}%")
 
     async def process_job(self, message):
@@ -53,4 +53,22 @@ class FinalWorker:
         
         try:
             if not message.text: return
-            url = next(line.replace("URL:", "").strip() for line in message.text.split('\n') if line.startswith("
+            # خطای نوشتاری اینجا بود که اصلاح شد
+            url = next(line.replace("URL:", "").strip() for line in message.text.split('\n') if line.startswith("URL:"))
+            code = next(line.replace("CODE:", "").strip() for line in message.text.split('\n') if line.startswith("CODE:"))
+        except (StopIteration, AttributeError):
+            return
+
+        logger.info(f"Kar jadidیاft شد: {code}. Shorooe pardazesh...")
+        
+        file_path = await asyncio.get_event_loop().run_in_executor(
+            None, self.download_media, url, code
+        )
+        
+        if file_path and os.path.exists(file_path):
+            logger.info(f"Opload shoroo shod baraye CODE: {code}")
+            try:
+                await self.app.send_document(
+                    chat_id=message.chat.id,
+                    document=file_path,
+                    caption=f"✅ Uploaded\nCODE: {
