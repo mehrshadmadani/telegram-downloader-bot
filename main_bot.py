@@ -3,10 +3,9 @@ import random
 import string
 from telegram import Update
 from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes
-from telegram.error import Forbidden
-from config import BOT_TOKEN, GROUP_ID, DB_NAME, DB_USER, DB_PASS, DB_HOST, DB_PORT
+from config import BOT_TOKEN, GROUP_ID, DB_NAME, DB_USER, DB_PASS, DB_HOST, DB_PORT, ORDER_TOPIC_ID, LOG_TOPIC_ID
 
-# --- مدیریت دیتابیس PostgreSQL ---
+# ... (کلاس PostgresDB بدون هیچ تغییری اینجا قرار میگیرد) ...
 class PostgresDB:
     def __init__(self):
         self.conn_params = {"dbname": DB_NAME, "user": DB_USER, "password": DB_PASS, "host": DB_HOST, "port": DB_PORT}
@@ -37,37 +36,46 @@ class PostgresDB:
                 result = cur.fetchone()
                 return result[0] if result else None
 
-# --- ربات اصلی ---
 class AdvancedBot:
-    def __init__(self, token, group_id):
+    def __init__(self, token, group_id, order_topic_id, log_topic_id):
         self.token = token
         self.group_id = int(group_id)
+        self.order_topic_id = int(order_topic_id)
+        self.log_topic_id = int(log_topic_id)
         self.db = PostgresDB()
         self.app = Application.builder().token(self.token).build()
+
     def generate_code(self):
         return ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
+
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if update.message:
-            self.db.add_user_if_not_exists(update.effective_user)
-            await update.message.reply_text("🚀 **ربات دانلودر**\n\nلینک یوتیوب یا اینستاگرام خود را بفرستید.")
+        user = update.effective_user
+        self.db.add_user_if_not_exists(user)
+        username = f"@{user.username}" if user.username else "ندارد"
+        log_message = (f"🎉 کاربر جدید\n\n👤 نام: {user.first_name}\n🆔 نام کاربری: {username}\n🔢 آیدی: `{user.id}`")
+        try:
+            await context.bot.send_message(chat_id=self.group_id, text=log_message, message_thread_id=self.log_topic_id, parse_mode='Markdown')
+        except Exception as e:
+            print(f"❌ Could not send new user log: {e}")
+        await update.message.reply_text("🚀 **ربات دانلودر**\n\nلینک خود را ارسال کنید.")
+
     async def handle_url(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not update.message or not update.message.text: return
         user = update.effective_user
         self.db.add_user_if_not_exists(user)
         url = update.message.text.strip()
         code = self.generate_code()
         self.db.add_job(code, user.id, url)
-        
-        # --- اصلاح کلیدی: اضافه کردن User ID به پیام ---
         message_for_worker = f"⬇️ NEW JOB\nURL: {url}\nCODE: {code}\nUSER_ID: {user.id}"
-        
         try:
-            await context.bot.send_message(chat_id=self.group_id, text=message_for_worker)
-            await update.message.reply_text(f"✅ **درخواست شما ثبت شد!**\n\n🏷️ **کد پیگیری:** `{code}`", parse_mode='Markdown')
+            await context.bot.send_message(chat_id=self.group_id, text=message_for_worker, message_thread_id=self.order_topic_id)
+            await update.message.reply_text(f"✅ **درخواست ثبت شد!**\n\n🏷️ **کد پیگیری:** `{code}`", parse_mode='Markdown')
         except Exception as e:
-            print(f"❌ Error sending job {code} to group: {e}")
+            print(f"❌ Error sending job to order topic: {e}")
+
     async def handle_group_files(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not update.message or not update.message.caption or "CODE:" not in update.message.caption: return
+        # فقط به فایل‌های داخل تاپیک سفارشات واکنش نشان بده
+        if not update.message or update.message.message_thread_id != self.order_topic_id or "CODE:" not in update.message.caption:
+            return
         try:
             code = update.message.caption.split("CODE:")[1].strip()
             user_id = self.db.get_user_by_code(code)
@@ -80,12 +88,14 @@ class AdvancedBot:
             self.db.update_job_status(code, 'completed')
         except Exception as e:
             print(f"❌ Error sending file to user: {e}")
+
     def run(self):
         self.app.add_handler(CommandHandler("start", self.start_command))
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_url))
         self.app.add_handler(MessageHandler((filters.VIDEO | filters.Document.ALL) & filters.Chat(self.group_id) & filters.CAPTION, self.handle_group_files))
-        print("🚀 Bot is running with PostgreSQL...")
+        print("🚀 Bot is running with PostgreSQL and Topics...")
         self.app.run_polling()
+
 if __name__ == "__main__":
-    bot = AdvancedBot(token=BOT_TOKEN, group_id=GROUP_ID)
+    bot = AdvancedBot(token=BOT_TOKEN, group_id=GROUP_ID, order_topic_id=ORDER_TOPIC_ID, log_topic_id=LOG_TOPIC_ID)
     bot.run()
