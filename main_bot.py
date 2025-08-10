@@ -5,7 +5,6 @@ from datetime import datetime
 from telegram import Update
 from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes
 from telegram.error import Forbidden
-# وارد کردن تنظیمات از فایل کانفیگ
 from config import BOT_TOKEN, GROUP_ID
 
 # --- کلاس دیتابیس (بدون تغییر) ---
@@ -57,9 +56,7 @@ class AdvancedBot:
         if not update.message or not update.message.text: return
         url = update.message.text.strip()
         user_id = update.effective_user.id
-
-        if not self.is_valid_url(url):
-            return
+        if not self.is_valid_url(url): return
 
         code = self.generate_code()
         self.db.add_job(code, user_id, url)
@@ -73,22 +70,34 @@ class AdvancedBot:
         except Exception as e:
             print(f"❌ Error sending job {code} to group: {e}")
 
+    # --- تابع ارسال فایل به کاربر (تغییر یافته) ---
     async def handle_group_files(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not update.message or not update.message.caption or "CODE:" not in update.message.caption: return
         
         try:
             code = update.message.caption.split("CODE:")[1].strip()
             user_id = self.db.get_user_by_code(code)
-            if not user_id: return
+            if not user_id: 
+                print(f"Code {code} not found for user.")
+                return
 
-            await update.message.forward(chat_id=user_id)
-            await context.bot.send_message(chat_id=user_id, text="🎉 **دانلود شما آماده‌ست!**", parse_mode='Markdown')
+            caption = "🎉 **دانلود شما آماده‌ست!**"
+            
+            # تشخیص نوع فایل و ارسال به عنوان پیام جدید
+            if update.message.video:
+                await context.bot.send_video(chat_id=user_id, video=update.message.video.file_id, caption=caption, parse_mode='Markdown')
+            elif update.message.document:
+                await context.bot.send_document(chat_id=user_id, document=update.message.document.file_id, caption=caption, parse_mode='Markdown')
+            elif update.message.photo:
+                # ارسال بزرگترین سایز عکس
+                await context.bot.send_photo(chat_id=user_id, photo=update.message.photo[-1].file_id, caption=caption, parse_mode='Markdown')
+            
             self.db.update_job_status(code, 'completed')
-            print(f"✅ File with code {code} successfully sent to user {user_id}.")
+            print(f"✅ File with code {code} sent as a new message to user {user_id}.")
         except Forbidden:
             print(f"❌ User {user_id} has blocked the bot. Could not send file for code {code}.")
         except Exception as e:
-            print(f"❌ Error forwarding file to user: {e}")
+            print(f"❌ Error sending new file to user: {e}")
 
     def run(self):
         self.app.add_handler(CommandHandler("start", self.start_command))
@@ -101,6 +110,5 @@ class AdvancedBot:
         self.app.run_polling()
 
 if __name__ == "__main__":
-    # حالا اطلاعات از فایل کانفیگ خوانده می‌شود
     bot = AdvancedBot(token=BOT_TOKEN, group_id=GROUP_ID)
     bot.run()
