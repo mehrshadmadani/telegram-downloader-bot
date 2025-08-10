@@ -5,37 +5,54 @@ from telegram import Update
 from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes
 from config import BOT_TOKEN, GROUP_ID, DB_NAME, DB_USER, DB_PASS, DB_HOST, DB_PORT, ORDER_TOPIC_ID, LOG_TOPIC_ID
 
-# ... (کلاس PostgresDB بدون هیچ تغییری اینجا قرار میگیرد) ...
+# --- مدیریت دیتابیس PostgreSQL ---
 class PostgresDB:
     def __init__(self):
         self.conn_params = {"dbname": DB_NAME, "user": DB_USER, "password": DB_PASS, "host": DB_HOST, "port": DB_PORT}
         self.init_database()
+
     def get_conn(self):
         return psycopg2.connect(**self.conn_params)
+
     def init_database(self):
         with self.get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute('CREATE TABLE IF NOT EXISTS users (user_id BIGINT PRIMARY KEY, first_name TEXT, username TEXT, join_date TIMESTAMP WITH TIME ZONE DEFAULT NOW());')
                 cur.execute('CREATE TABLE IF NOT EXISTS jobs (id SERIAL PRIMARY KEY, code TEXT UNIQUE NOT NULL, user_id BIGINT REFERENCES users(user_id), url TEXT NOT NULL, status TEXT DEFAULT \'pending\', created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), completed_at TIMESTAMP WITH TIME ZONE);')
+
     def add_user_if_not_exists(self, user: Update.effective_user):
+        """
+        کاربر را اضافه می‌کند و اگر کاربر جدید باشد، True برمی‌گرداند
+        """
+        sql = '''
+            INSERT INTO users (user_id, first_name, username) 
+            VALUES (%s, %s, %s) 
+            ON CONFLICT (user_id) DO NOTHING;
+        '''
         with self.get_conn() as conn:
             with conn.cursor() as cur:
-                cur.execute('INSERT INTO users (user_id, first_name, username) VALUES (%s, %s, %s) ON CONFLICT (user_id) DO NOTHING;', (user.id, user.first_name, user.username))
+                cur.execute(sql, (user.id, user.first_name, user.username))
+                # cur.rowcount نشان می‌دهد که آیا ردیف جدیدی اضافه شده است یا نه
+                return cur.rowcount > 0
+
     def add_job(self, code, user_id, url):
         with self.get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("INSERT INTO jobs (code, user_id, url) VALUES (%s, %s, %s);", (code, user_id, url))
-    def update_job_status(self, code, status):
-        with self.get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute("UPDATE jobs SET status = %s, completed_at = NOW() WHERE code = %s;", (status, code))
+
     def get_user_by_code(self, code):
         with self.get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT user_id FROM jobs WHERE code = %s;", (code,))
                 result = cur.fetchone()
                 return result[0] if result else None
+    
+    def update_job_status(self, code, status):
+        with self.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE jobs SET status = %s, completed_at = NOW() WHERE code = %s;", (status, code))
 
+# --- ربات اصلی ---
 class AdvancedBot:
     def __init__(self, token, group_id, order_topic_id, log_topic_id):
         self.token = token
@@ -50,18 +67,32 @@ class AdvancedBot:
 
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
-        self.db.add_user_if_not_exists(user)
-        username = f"@{user.username}" if user.username else "ندارد"
-        log_message = (f"🎉 کاربر جدید\n\n👤 نام: {user.first_name}\n🆔 نام کاربری: {username}\n🔢 آیدی: `{user.id}`")
-        try:
-            await context.bot.send_message(chat_id=self.group_id, text=log_message, message_thread_id=self.log_topic_id, parse_mode='Markdown')
-        except Exception as e:
-            print(f"❌ Could not send new user log: {e}")
+        # چک می‌کنیم که آیا کاربر جدید است یا نه
+        is_new_user = self.db.add_user_if_not_exists(user)
+
+        # اگر کاربر جدید بود، گزارش را ارسال کن
+        if is_new_user:
+            username = f"@{user.username}" if user.username else "ندارد"
+            log_message = (
+                f"🎉 یک کاربر جدید ربات را استارت کرد\n\n"
+                f"نام : {user.first_name}\n"
+                f"نام کاربری : {username}\n"
+                f"آیدی عددی : `{user.id}`"
+            )
+            try:
+                if self.log_topic_id:
+                    await context.bot.send_message(
+                        chat_id=self.group_id, text=log_message,
+                        message_thread_id=self.log_topic_id, parse_mode='Markdown'
+                    )
+            except Exception as e:
+                print(f"❌ Could not send new user log: {e}")
+
         await update.message.reply_text("🚀 **ربات دانلودر**\n\nلینک خود را ارسال کنید.")
 
     async def handle_url(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
-        self.db.add_user_if_not_exists(user)
+        self.db.add_user_if_not_exists(user) # اگر کاربر لینک فرستاد ولی استارت نزده بود
         url = update.message.text.strip()
         code = self.generate_code()
         self.db.add_job(code, user.id, url)
@@ -73,7 +104,6 @@ class AdvancedBot:
             print(f"❌ Error sending job to order topic: {e}")
 
     async def handle_group_files(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        # فقط به فایل‌های داخل تاپیک سفارشات واکنش نشان بده
         if not update.message or update.message.message_thread_id != self.order_topic_id or "CODE:" not in update.message.caption:
             return
         try:
