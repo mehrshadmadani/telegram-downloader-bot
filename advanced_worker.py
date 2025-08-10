@@ -5,25 +5,22 @@ import yt_dlp
 from pyrogram import Client, filters
 from pyrogram.errors import ApiIdInvalid, ApiIdPublishedFlood
 from pyrogram.types import Message
+import time
 
 # --- تنظیمات لاگ برای دیباگ ---
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # --- کلاس اصلی Worker ---
 class AdvancedWorker:
     def __init__(self, api_id, api_hash, session_name="advanced_worker"):
-        self.app = Client(
-            name=session_name,
-            api_id=api_id,
-            api_hash=api_hash
-        )
+        self.app = Client(name=session_name, api_id=api_id, api_hash=api_hash)
         self.download_dir = "downloads"
         os.makedirs(self.download_dir, exist_ok=True)
-        self.active_codes = set() # برای جلوگیری از پردازش تکراری
+        self.processed_ids = set() # برای جلوگیری از پردازش پیام تکراری
 
     def download_media(self, url, code):
-        logger.info(f"Starting download for CODE: {code}")
+        logger.info(f"Shروع download baraye CODE: {code}")
         output_path = os.path.join(self.download_dir, f"{code}_%(title).30s.%(ext)s")
         
         ydl_opts = {
@@ -33,104 +30,94 @@ class AdvancedWorker:
             'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None,
             'ignoreerrors': True,
             'quiet': True,
+            'no_warnings': True,
         }
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-                # پیدا کردن فایل دانلود شده چون اسمش دقیق مشخص نیست
+                ydl.extract_info(url, download=True)
                 for f in os.listdir(self.download_dir):
                     if f.startswith(code):
                         downloaded_file = os.path.join(self.download_dir, f)
-                        logger.info(f"Download successful for CODE: {code} -> {downloaded_file}")
+                        logger.info(f"Download movaffagh baraye CODE: {code} -> {downloaded_file}")
                         return downloaded_file
-            logger.error(f"Download failed for CODE: {code}. No file was created.")
+            logger.error(f"Download namovaffagh baraye CODE: {code}. File sakhte nashod.")
             return None
         except Exception as e:
-            logger.error(f"Exception during download for CODE {code}: {e}")
+            logger.error(f"Exception dar hengam download baraye CODE {code}: {e}")
             return None
 
-    async def progress(self, current, total, code):
-        percentage = int(current * 100 / total)
-        # لاگ آپلود در هر ۲۵٪
-        if percentage % 25 == 0:
-             logger.info(f"Uploading for {code}: {percentage}%")
+    async def upload_file(self, chat_id, file_path, code):
+        try:
+            logger.info(f"Dar hale upload file: {file_path}")
+            await self.app.send_document(
+                chat_id=chat_id,
+                document=file_path,
+                caption=f"✅ Uploaded\nCODE: {code}"
+            )
+            logger.info(f"Upload movaffagh baraye CODE: {code}")
+        except Exception as e:
+            logger.error(f"Khata dar upload file baraye CODE {code}: {e}")
+            await self.app.send_message(chat_id, f"❌ Upload FAILED for CODE: {code}\nError: {e}")
+        finally:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                logger.info(f"File pak shod: {file_path}")
 
     async def process_job(self, message: Message):
-        if "URL:" not in message.text or "CODE:" not in message.text:
-            return
-
-        lines = message.text.split('\n')
-        try:
-            url = next(line.replace("URL:", "").strip() for line in lines if line.startswith("URL:"))
-            code = next(line.replace("CODE:", "").strip() for line in lines if line.startswith("CODE:"))
-        except StopIteration:
-            return # فرمت پیام درست نیست
-
-        # اگر این کد در حال پردازش است، آن را نادیده بگیر
-        if code in self.active_codes:
+        if message.message_id in self.processed_ids:
             return
         
-        self.active_codes.add(code)
-        logger.info(f"Processing job for CODE: {code}")
+        self.processed_ids.add(message.message_id)
+
+        try:
+            url = next(line.replace("URL:", "").strip() for line in message.text.split('\n') if line.startswith("URL:"))
+            code = next(line.replace("CODE:", "").strip() for line in message.text.split('\n') if line.startswith("CODE:"))
+        except (StopIteration, AttributeError):
+            return
+
+        logger.info(f"Dar hale pardazesh kar baraye CODE: {code}")
 
         loop = asyncio.get_event_loop()
         file_path = await loop.run_in_executor(None, self.download_media, url, code)
 
-        if not file_path or not os.path.exists(file_path):
-            logger.error(f"Upload failed for CODE: {code} because file does not exist.")
-            await message.reply_text(f"❌ Download FAILED for CODE: {code}")
+        if file_path and os.path.exists(file_path):
+            await self.upload_file(message.chat.id, file_path, code)
         else:
-            logger.info(f"Uploading file: {file_path}")
-            try:
-                await self.app.send_document(
-                    chat_id=message.chat.id,
-                    document=file_path,
-                    caption=f"✅ Uploaded\nCODE: {code}",
-                    progress=self.progress,
-                    progress_args=(code,)
-                )
-                logger.info(f"Upload successful for CODE: {code}")
-            except Exception as e:
-                logger.error(f"Failed to upload file for CODE {code}: {e}")
-                await message.reply_text(f"❌ Upload FAILED for CODE: {code}\nError: {e}")
-            finally:
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-                    logger.info(f"Cleaned up file: {file_path}")
-        
-        # حذف کد از لیست کدهای فعال
-        self.active_codes.remove(code)
-
+            logger.error(f"Upload namovaffagh baraye CODE: {code} chon file vojood nadarad.")
+            await self.app.send_message(message.chat.id, f"❌ Download FAILED for CODE: {code}")
 
     async def run(self):
         try:
             await self.app.start()
-            logger.info("Worker has started successfully.")
-        except (ApiIdInvalid, ApiIdPublishedFlood):
-            logger.critical("API ID / API HASH is invalid. Exiting.")
-            return
+            me = await self.app.get_me()
+            logger.info(f"Worker ba movaffaghiat be onvane {me.first_name} vared shod.")
         except Exception as e:
-            logger.critical(f"An error occurred during client startup: {e}")
+            logger.critical(f"Khata dar start kardan client: {e}")
             return
 
-        target_chat_id = int(input("Enter the GROUP ID for the worker to listen to: "))
+        target_chat_id_str = input("Lotfan adad Group ID ra baraye check kardan vared konid: ")
+        target_chat_id = int(target_chat_id_str)
 
-        @self.app.on_message(filters.chat(target_chat_id) & filters.regex("⬇️ NEW JOB"))
-        async def new_job_handler(_, message: Message):
-            asyncio.create_task(self.process_job(message))
+        logger.info(f"Worker shoroo be check kardan Group ID: {target_chat_id} kard...")
 
-        logger.info(f"Worker is now listening for jobs in chat ID: {target_chat_id}")
-        # این حلقه خالی برنامه را در حال اجرا نگه می‌دارد
         while True:
-            await asyncio.sleep(3600)
+            try:
+                # گرفتن ۱۰ پیام آخر از گروه
+                async for message in self.app.get_chat_history(chat_id=target_chat_id, limit=10):
+                    if message.text and "⬇️ NEW JOB" in message.text:
+                       # ایجاد یک تسک جدید برای پردازش پیام که برنامه اصلی متوقف نشود
+                       asyncio.create_task(self.process_job(message))
+                
+                # هر ۵ ثانیه یک بار چک کن
+                await asyncio.sleep(5)
 
+            except Exception as e:
+                logger.error(f"Yek khata dar halghe asli rokh dad: {e}")
+                await asyncio.sleep(20) # در صورت خطا بیشتر صبر کن
 
 if __name__ == "__main__":
     print("--- Rah andazi Advanced Worker ---")
-    print("Baraye login be API ID va API Hash niaz darid.")
-    print("Mitoonid az my.telegram.org begirid.")
-    
     try:
         api_id = int(input("Lotfan API ID khod ra vared konid: "))
         api_hash = input("Lotfan API HASH khod ra vared konid: ")
