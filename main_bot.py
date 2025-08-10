@@ -54,7 +54,8 @@ def membership_required(func):
         for channel in FORCED_JOIN_CHANNELS:
             try:
                 member = await context.bot.get_chat_member(chat_id=channel, user_id=user.id)
-                if member.status in [ChatMemberStatus.LEFT, ChatMemberStatus.KICKED]:
+                # --- اصلاحیه: استفاده از BANNED به جای KICKED ---
+                if member.status in [ChatMemberStatus.LEFT, ChatMemberStatus.BANNED]:
                     channels_to_join.append(channel)
             except BadRequest as e:
                 if "user not found" in e.message.lower():
@@ -69,23 +70,18 @@ def membership_required(func):
             buttons = [[InlineKeyboardButton(f" عضویت در {channel.lstrip('@')}", url=f"https://t.me/{channel.lstrip('@')}")] for channel in channels_to_join]
             buttons.append([InlineKeyboardButton("✅ بررسی عضویت", callback_data="check_membership")])
             reply_markup = InlineKeyboardMarkup(buttons)
-            
             text = "کاربر گرامی، برای استفاده از ربات لازم است ابتدا در کانال‌های زیر عضو شوید:"
             
-            # اگر کاربر روی دکمه کلیک کرده بود و هنوز عضو نبود
             if update.callback_query:
                 await update.callback_query.answer("شما هنوز در تمام کانال‌ها عضو نشده‌اید!", show_alert=True)
-                # برای جلوگیری از خطای "Message not modified"
                 try:
                     await update.callback_query.edit_message_text(text, reply_markup=reply_markup)
                 except BadRequest as e:
-                    if not e.message.startswith("Message is not modified"):
-                        raise e
+                    if not e.message.startswith("Message is not modified"): raise e
             else:
                 await update.message.reply_text(text, reply_markup=reply_markup)
             return
 
-        # اگر کاربر عضو بود و روی دکمه کلیک کرده بود، پیام قبلی را پاک کن و پیام جدید بفرست
         if update.callback_query:
             await update.callback_query.answer("عضویت شما تایید شد!")
             await update.callback_query.delete_message()
@@ -114,7 +110,6 @@ class AdvancedBot:
         await update.message.reply_text("✅ خوش آمدید! شما عضو کانال‌های مورد نیاز هستید.\n\nمی‌توانید لینک خود را ارسال کنید.")
 
     async def manage_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        # ... (بدون تغییر) ...
         if update.effective_user.id not in self.admin_ids:
             await update.message.reply_text("access denied.")
             return
@@ -122,7 +117,6 @@ class AdvancedBot:
 
     @membership_required
     async def handle_url(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        # ... (بدون تغییر) ...
         user = update.effective_user
         self.db.add_user_if_not_exists(user)
         url = update.message.text.strip()
@@ -133,7 +127,6 @@ class AdvancedBot:
         await update.message.reply_text(f"✅ **درخواست ثبت شد!**\n\n🏷️ **کد پیگیری:** `{code}`", parse_mode='Markdown')
 
     async def handle_group_files(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        # ... (بدون تغییر) ...
         if not update.message or update.message.message_thread_id != self.order_topic_id or "CODE:" not in update.message.caption: return
         try:
             code = update.message.caption.split("CODE:")[1].strip()
@@ -151,11 +144,11 @@ class AdvancedBot:
             print(f"❌ Error sending file to user: {e}")
     
     async def check_membership_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        # حالا دکوراتور خودش همه کارها را انجام می‌دهد
-        await self.start_command(update, context)
+        query = update.callback_query
+        # با فراخوانی دوباره دکوراتور، وضعیت کاربر چک می‌شود
+        await wrapper_function(self.start_command, self, update, context)
 
     def run(self):
-        # ... (بقیه بدون تغییر) ...
         self.app.add_handler(CommandHandler("start", self.start_command))
         self.app.add_handler(CommandHandler("manage", self.manage_command))
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_url))
@@ -164,6 +157,10 @@ class AdvancedBot:
         print("🚀 Bot is running with Forced Join...")
         self.app.run_polling()
         
+# A helper to call the decorated function from the callback
+async def wrapper_function(func, *args, **kwargs):
+    await func(*args, **kwargs)
+
 if __name__ == "__main__":
     bot = AdvancedBot(
         token=BOT_TOKEN, group_id=GROUP_ID, 
