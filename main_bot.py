@@ -21,18 +21,10 @@ class PostgresDB:
                 cur.execute('CREATE TABLE IF NOT EXISTS jobs (id SERIAL PRIMARY KEY, code TEXT UNIQUE NOT NULL, user_id BIGINT REFERENCES users(user_id), url TEXT NOT NULL, status TEXT DEFAULT \'pending\', created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), completed_at TIMESTAMP WITH TIME ZONE);')
 
     def add_user_if_not_exists(self, user: Update.effective_user):
-        """
-        کاربر را اضافه می‌کند و اگر کاربر جدید باشد، True برمی‌گرداند
-        """
-        sql = '''
-            INSERT INTO users (user_id, first_name, username) 
-            VALUES (%s, %s, %s) 
-            ON CONFLICT (user_id) DO NOTHING;
-        '''
+        sql = 'INSERT INTO users (user_id, first_name, username) VALUES (%s, %s, %s) ON CONFLICT (user_id) DO NOTHING;'
         with self.get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, (user.id, user.first_name, user.username))
-                # cur.rowcount نشان می‌دهد که آیا ردیف جدیدی اضافه شده است یا نه
                 return cur.rowcount > 0
 
     def add_job(self, code, user_id, url):
@@ -67,17 +59,16 @@ class AdvancedBot:
 
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
-        # چک می‌کنیم که آیا کاربر جدید است یا نه
         is_new_user = self.db.add_user_if_not_exists(user)
 
-        # اگر کاربر جدید بود، گزارش را ارسال کن
         if is_new_user:
             username = f"@{user.username}" if user.username else "ندارد"
+            # --- تغییر کلیدی در این خط ---
             log_message = (
                 f"🎉 یک کاربر جدید ربات را استارت کرد\n\n"
                 f"نام : {user.first_name}\n"
                 f"نام کاربری : {username}\n"
-                f"آیدی عددی : `{user.id}`"
+                f"آیدی عددی : [{user.id}](tg://user?id={user.id})"
             )
             try:
                 if self.log_topic_id:
@@ -92,7 +83,7 @@ class AdvancedBot:
 
     async def handle_url(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
-        self.db.add_user_if_not_exists(user) # اگر کاربر لینک فرستاد ولی استارت نزده بود
+        self.db.add_user_if_not_exists(user)
         url = update.message.text.strip()
         code = self.generate_code()
         self.db.add_job(code, user.id, url)
@@ -125,7 +116,7 @@ class AdvancedBot:
         self.app.add_handler(MessageHandler((filters.VIDEO | filters.Document.ALL) & filters.Chat(self.group_id) & filters.CAPTION, self.handle_group_files))
         print("🚀 Bot is running with PostgreSQL and Topics...")
         self.app.run_polling()
-
+        
 if __name__ == "__main__":
     bot = AdvancedBot(token=BOT_TOKEN, group_id=GROUP_ID, order_topic_id=ORDER_TOPIC_ID, log_topic_id=LOG_TOPIC_ID)
     bot.run()
