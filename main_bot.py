@@ -9,6 +9,7 @@ from telegram.error import BadRequest
 from config import (BOT_TOKEN, GROUP_ID, DB_NAME, DB_USER, DB_PASS, 
                     DB_HOST, DB_PORT, ORDER_TOPIC_ID, LOG_TOPIC_ID, ADMIN_IDS, FORCED_JOIN_CHANNELS)
 
+# ... (کلاس PostgresDB و دکوراتور membership_required بدون تغییر اینجا قرار میگیرد) ...
 class PostgresDB:
     def __init__(self):
         self.conn_params = {"dbname": DB_NAME, "user": DB_USER, "password": DB_PASS, "host": DB_HOST, "port": DB_PORT}
@@ -133,8 +134,15 @@ class AdvancedBot:
             if not user_id: return
             self.db.update_job_on_complete(code, 'completed', size)
             caption = "🎉 **دانلود شما آماده‌ست!**"
-            if update.message.video: await context.bot.send_video(chat_id=user_id, video=update.message.video.file_id, caption=caption, parse_mode='Markdown')
-            elif update.message.document: await context.bot.send_document(chat_id=user_id, document=update.message.document.file_id, caption=caption, parse_mode='Markdown')
+            
+            # --- تغییر کلیدی: اضافه شدن پشتیبانی از فایل صوتی ---
+            if update.message.video:
+                await context.bot.send_video(chat_id=user_id, video=update.message.video.file_id, caption=caption, parse_mode='Markdown')
+            elif update.message.audio:
+                await context.bot.send_audio(chat_id=user_id, audio=update.message.audio.file_id, caption=caption, parse_mode='Markdown')
+            elif update.message.document:
+                await context.bot.send_document(chat_id=user_id, document=update.message.document.file_id, caption=caption, parse_mode='Markdown')
+
         except Exception as e:
             print(f"❌ Error processing group file: {e}")
     
@@ -147,8 +155,9 @@ class AdvancedBot:
         self.app.add_handler(CallbackQueryHandler(self.stats_callback, pattern="^bot_stats$"))
         self.app.add_handler(CallbackQueryHandler(self.check_membership_callback, pattern="^check_membership$"))
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_url))
-        self.app.add_handler(MessageHandler((filters.VIDEO | filters.Document.ALL) & filters.Chat(self.group_id) & filters.CAPTION, self.handle_group_files))
-        print("🚀 Bot is running with Stats Panel...")
+        # --- تغییر کلیدی: اضافه کردن فیلتر برای فایل صوتی ---
+        self.app.add_handler(MessageHandler((filters.VIDEO | filters.AUDIO | filters.Document.ALL) & filters.Chat(self.group_id) & filters.CAPTION, self.handle_group_files))
+        print("🚀 Bot is running with Audio Support...")
         self.app.run_polling()
         
 if __name__ == "__main__":
