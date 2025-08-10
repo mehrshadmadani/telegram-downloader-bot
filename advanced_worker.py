@@ -2,10 +2,8 @@ import os
 import asyncio
 import logging
 import yt_dlp
-from pyrogram import Client, filters
-from pyrogram.errors import ApiIdInvalid, ApiIdPublishedFlood
-from pyrogram.types import Message
-import time
+from pyrogram import Client
+from pyrogram.errors import FloodWait
 
 # --- تنظیمات لاگ برای دیباگ ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -56,6 +54,10 @@ class AdvancedWorker:
                 caption=f"✅ Uploaded\nCODE: {code}"
             )
             logger.info(f"Upload movaffagh baraye CODE: {code}")
+        except FloodWait as e:
+            logger.warning(f"Flood wait baraye {e.value} sanieh. Sabr mikonim...")
+            await asyncio.sleep(e.value)
+            await self.upload_file(chat_id, file_path, code) # Dobare talash kon
         except Exception as e:
             logger.error(f"Khata dar upload file baraye CODE {code}: {e}")
             await self.app.send_message(chat_id, f"❌ Upload FAILED for CODE: {code}\nError: {e}")
@@ -64,13 +66,14 @@ class AdvancedWorker:
                 os.remove(file_path)
                 logger.info(f"File pak shod: {file_path}")
 
-    async def process_job(self, message: Message):
-        if message.message_id in self.processed_ids:
+    async def process_job(self, message):
+        if message.id in self.processed_ids:
             return
         
-        self.processed_ids.add(message.message_id)
+        self.processed_ids.add(message.id)
 
         try:
+            if not message.text: return
             url = next(line.replace("URL:", "").strip() for line in message.text.split('\n') if line.startswith("URL:"))
             code = next(line.replace("CODE:", "").strip() for line in message.text.split('\n') if line.startswith("CODE:"))
         except (StopIteration, AttributeError):
@@ -92,6 +95,15 @@ class AdvancedWorker:
             await self.app.start()
             me = await self.app.get_me()
             logger.info(f"Worker ba movaffaghiat be onvane {me.first_name} vared shod.")
+            
+            # --- مرحله گرم کردن کش ---
+            logger.info("Cache garm mishavad, dar hale gereftan list-e chat-ha...")
+            dialog_count = 0
+            async for _ in self.app.get_dialogs():
+                dialog_count += 1
+            logger.info(f"Cache garm shod. {dialog_count} chat pardazesh shod.")
+            # -------------------------
+
         except Exception as e:
             logger.critical(f"Khata dar start kardan client: {e}")
             return
@@ -103,18 +115,18 @@ class AdvancedWorker:
 
         while True:
             try:
-                # گرفتن ۱۰ پیام آخر از گروه
-                async for message in self.app.get_chat_history(chat_id=target_chat_id, limit=10):
+                async for message in self.app.get_chat_history(chat_id=target_chat_id, limit=20):
                     if message.text and "⬇️ NEW JOB" in message.text:
-                       # ایجاد یک تسک جدید برای پردازش پیام که برنامه اصلی متوقف نشود
                        asyncio.create_task(self.process_job(message))
                 
-                # هر ۵ ثانیه یک بار چک کن
                 await asyncio.sleep(5)
 
+            except FloodWait as e:
+                logger.warning(f"Flood wait baraye {e.value} sanieh. Sabr mikonim...")
+                await asyncio.sleep(e.value)
             except Exception as e:
                 logger.error(f"Yek khata dar halghe asli rokh dad: {e}")
-                await asyncio.sleep(20) # در صورت خطا بیشتر صبر کن
+                await asyncio.sleep(20)
 
 if __name__ == "__main__":
     print("--- Rah andazi Advanced Worker ---")
