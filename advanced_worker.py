@@ -12,7 +12,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # --- کلاس ورکر نهایی ---
-class FinalWorker:
+# اسم کلاس اینجا اصلاح شد
+class TelethonWorker:
     def __init__(self, api_id, api_hash, phone):
         self.app = TelegramClient("telethon_session", api_id, api_hash)
         self.phone = phone
@@ -74,55 +75,4 @@ class FinalWorker:
         file_path = await asyncio.to_thread(self.download_media, url, code)
         
         if file_path and os.path.exists(file_path):
-            logger.info(f"Opload shoroo shod baraye CODE: {code}")
-            try:
-                await self.app.send_file(
-                    message.chat_id, file_path, caption=f"✅ Uploaded\nCODE: {code}",
-                    progress_callback=lambda s, t: self.upload_progress(s, t, code)
-                )
-                logger.info(f"✅ Upload KAMEL shod baraye CODE: {code}")
-            except Exception as e:
-                logger.error(f"Khata dar upload (CODE: {code}): {e}")
-            finally:
-                if os.path.exists(file_path): os.remove(file_path)
-        else:
-            logger.error(f"Download namovaffagh bood baraye CODE: {code}. File peyda nashod.")
-
-    async def run(self):
-        await self.app.start(phone=self.phone)
-        me = await self.app.get_me()
-        logger.info(f"Worker (Final Version) ba movaffaghiat be onvane {me.first_name} vared shod.")
-
-        target_chat_id = int(input("Lotfan adad Group ID ra vared konid: "))
-        
-        try:
-            entity = await self.app.get_entity(target_chat_id)
-            logger.info(f"Dastresi be Group '{entity.title}' ba movaffaghiat anjam shod.")
-        except Exception as e:
-            logger.critical(f"Nemitavan be Group ID {target_chat_id} dastresi peyda kard. Khata: {e}")
-            return
-
-        logger.info(f"Worker shoroo be check kardan payamha kard...")
-        while True:
-            try:
-                async for message in self.app.iter_messages(entity=entity, limit=20):
-                    # بهینه‌سازی: فقط پیام‌های جدیدتر از زمان شروع را پردازش کن
-                    if message.date < self.start_time:
-                        break # چون پیام‌ها از جدید به قدیم مرتب هستند، به محض رسیدن به پیام قدیمی، حلقه را متوقف می‌کنیم
-                    
-                    if message.text and "⬇️ NEW JOB" in message.text:
-                        await self.process_job(message)
-                await asyncio.sleep(10)
-            except Exception as e:
-                logger.error(f"Yek khata dar halghe asli rokh dad: {e}")
-                await asyncio.sleep(30)
-
-async def main():
-    worker = TelethonWorker(
-        api_id=TELEGRAM_API_ID, api_hash=TELEGRAM_API_HASH, phone=TELEGRAM_PHONE
-    )
-    await worker.run()
-
-if __name__ == "__main__":
-    print("--- Rah andazi Final Worker (Telethon) ---")
-    asyncio.run(main())
+            logger.info(f"Opload shoroo shod baraye CODE:
