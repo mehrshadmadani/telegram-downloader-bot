@@ -53,7 +53,6 @@ class FinalWorker:
         
         try:
             if not message.text: return
-            # خطای نوشتاری اینجا بود که اصلاح شد
             url = next(line.replace("URL:", "").strip() for line in message.text.split('\n') if line.startswith("URL:"))
             code = next(line.replace("CODE:", "").strip() for line in message.text.split('\n') if line.startswith("CODE:"))
         except (StopIteration, AttributeError):
@@ -68,7 +67,63 @@ class FinalWorker:
         if file_path and os.path.exists(file_path):
             logger.info(f"Opload shoroo shod baraye CODE: {code}")
             try:
+                # خطای نوشتاری اینجا بود که اصلاح شد
                 await self.app.send_document(
                     chat_id=message.chat.id,
                     document=file_path,
-                    caption=f"✅ Uploaded\nCODE: {
+                    caption=f"✅ Uploaded\nCODE: {code}",
+                    progress=self.upload_progress,
+                    progress_args=(code,)
+                )
+                logger.info(f"✅ Upload KAMEL shod baraye CODE: {code}")
+            except Exception as e:
+                logger.error(f"Khata dar upload (CODE: {code}): {e}")
+            finally:
+                if os.path.exists(file_path): os.remove(file_path)
+        else:
+            logger.error(f"Download namovaffagh bood baraye CODE: {code}. File peyda nashod.")
+
+    async def run(self):
+        await self.app.start()
+        me = await self.app.get_me()
+        logger.info(f"Worker (Final Version) ba movaffaghiat be onvane {me.first_name} vared shod.")
+
+        logger.info("Cache garm mishavad, dar hale gereftan list-e chat-ha...")
+        try:
+            async for _ in self.app.get_dialogs():
+                pass
+            logger.info("Cache garm shod.")
+        except Exception as e:
+            logger.warning(f"Khata dar gereftan dialog-ha: {e}")
+
+        target_chat_id = int(input("Lotfan adad Group ID ra vared konid: "))
+        
+        try:
+            await self.app.get_chat(target_chat_id)
+            logger.info(f"Dastresi be Group ID {target_chat_id} ba movaffaghiat anjam shod.")
+        except Exception as e:
+            logger.critical(f"Nemitavan be Group ID {target_chat_id} dastresi peyda kard. Khata: {e}")
+            logger.critical("Motmaen shavid worker ozve group ast. Barname motavaghef shod.")
+            return
+
+        logger.info(f"Worker shoroo be check kardan payamha kard...")
+        while True:
+            try:
+                async for message in self.app.get_chat_history(chat_id=target_chat_id, limit=10):
+                    if message.text and "⬇️ NEW JOB" in message.text:
+                        await self.process_job(message)
+                await asyncio.sleep(10)
+            except Exception as e:
+                logger.error(f"Yek khata dar halghe asli rokh dad: {e}")
+                await asyncio.sleep(30)
+
+if __name__ == "__main__":
+    print("--- Rah andazi Final Worker ---")
+    try:
+        api_id = int(input("Lotfan API ID khod ra vared konid: "))
+        api_hash = input("Lotfan API HASH khod ra vared konid: ")
+    except ValueError:
+        print("API ID bayad adad bashad.")
+    else:
+        worker = FinalWorker(api_id=api_id, api_hash=api_hash)
+        asyncio.run(worker.run())
