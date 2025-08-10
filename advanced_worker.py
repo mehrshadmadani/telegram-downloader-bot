@@ -1,18 +1,20 @@
 import os
 import asyncio
 import logging
+from telethon import TelegramClient
+from telethon.errors.rpcerrorlist import FloodWaitError
 import yt_dlp
-from pyrogram import Client
-from pyrogram.errors import FloodWait
+from config import TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_PHONE
 
-# --- تنظیمات لاگ برای دیباگ ---
+# --- تنظیمات لاگ ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- کلاس اصلی Worker (نسخه نهایی و پایدار) ---
-class FinalWorker:
-    def __init__(self, api_id, api_hash, session_name="advanced_worker"):
-        self.app = Client(name=session_name, api_id=api_id, api_hash=api_hash)
+# --- کلاس ورکر نهایی با Telethon ---
+class TelethonWorker:
+    def __init__(self, api_id, api_hash, phone):
+        self.app = TelegramClient("telethon_session", api_id, api_hash)
+        self.phone = phone
         self.download_dir = "downloads"
         os.makedirs(self.download_dir, exist_ok=True)
         self.processed_ids = set()
@@ -40,8 +42,8 @@ class FinalWorker:
             logger.error(f"Exception dar hengam download (CODE: {code}): {e}")
             return None
 
-    async def upload_progress(self, current, total, code):
-        percentage = int(current * 100 / total)
+    async def upload_progress(self, sent_bytes, total_bytes, code):
+        percentage = int(sent_bytes * 100 / total_bytes)
         if percentage % 10 == 0 or percentage == 100:
             logger.info(f"Uploading CODE {code}: {percentage}%")
 
@@ -60,22 +62,23 @@ class FinalWorker:
 
         logger.info(f"Kar jadidیاft شد: {code}. Shorooe pardazesh...")
         
-        file_path = await asyncio.get_event_loop().run_in_executor(
-            None, self.download_media, url, code
-        )
+        # --- دانلود در یک ترد جداگانه ---
+        file_path = await asyncio.to_thread(self.download_media, url, code)
         
+        # --- آپلود با Telethon ---
         if file_path and os.path.exists(file_path):
             logger.info(f"Opload shoroo shod baraye CODE: {code}")
             try:
-                # خطای نوشتاری اینجا بود که اصلاح شد
-                await self.app.send_document(
-                    chat_id=message.chat.id,
-                    document=file_path,
+                await self.app.send_file(
+                    message.chat_id,
+                    file_path,
                     caption=f"✅ Uploaded\nCODE: {code}",
-                    progress=self.upload_progress,
-                    progress_args=(code,)
+                    progress_callback=lambda s, t: self.upload_progress(s, t, code)
                 )
                 logger.info(f"✅ Upload KAMEL shod baraye CODE: {code}")
+            except FloodWaitError as e:
+                logger.warning(f"Flood wait baraye {e.seconds} sanieh. Sabr mikonim...")
+                await asyncio.sleep(e.seconds)
             except Exception as e:
                 logger.error(f"Khata dar upload (CODE: {code}): {e}")
             finally:
@@ -84,32 +87,23 @@ class FinalWorker:
             logger.error(f"Download namovaffagh bood baraye CODE: {code}. File peyda nashod.")
 
     async def run(self):
-        await self.app.start()
+        await self.app.start(phone=self.phone)
         me = await self.app.get_me()
-        logger.info(f"Worker (Final Version) ba movaffaghiat be onvane {me.first_name} vared shod.")
-
-        logger.info("Cache garm mishavad, dar hale gereftan list-e chat-ha...")
-        try:
-            async for _ in self.app.get_dialogs():
-                pass
-            logger.info("Cache garm shod.")
-        except Exception as e:
-            logger.warning(f"Khata dar gereftan dialog-ha: {e}")
+        logger.info(f"Worker (Telethon Version) ba movaffaghiat be onvane {me.first_name} vared shod.")
 
         target_chat_id = int(input("Lotfan adad Group ID ra vared konid: "))
         
         try:
-            await self.app.get_chat(target_chat_id)
-            logger.info(f"Dastresi be Group ID {target_chat_id} ba movaffaghiat anjam shod.")
+            entity = await self.app.get_entity(target_chat_id)
+            logger.info(f"Dastresi be Group '{entity.title}' ba movaffaghiat anjam shod.")
         except Exception as e:
             logger.critical(f"Nemitavan be Group ID {target_chat_id} dastresi peyda kard. Khata: {e}")
-            logger.critical("Motmaen shavid worker ozve group ast. Barname motavaghef shod.")
             return
 
         logger.info(f"Worker shoroo be check kardan payamha kard...")
         while True:
             try:
-                async for message in self.app.get_chat_history(chat_id=target_chat_id, limit=10):
+                async for message in self.app.iter_messages(entity=entity, limit=10):
                     if message.text and "⬇️ NEW JOB" in message.text:
                         await self.process_job(message)
                 await asyncio.sleep(10)
@@ -117,13 +111,16 @@ class FinalWorker:
                 logger.error(f"Yek khata dar halghe asli rokh dad: {e}")
                 await asyncio.sleep(30)
 
+async def main():
+    # استفاده از مقادیر فایل کانفیگ
+    worker = TelethonWorker(
+        api_id=TELEGRAM_API_ID,
+        api_hash=TELEGRAM_API_HASH,
+        phone=TELEGRAM_PHONE
+    )
+    await worker.run()
+
 if __name__ == "__main__":
-    print("--- Rah andazi Final Worker ---")
-    try:
-        api_id = int(input("Lotfan API ID khod ra vared konid: "))
-        api_hash = input("Lotfan API HASH khod ra vared konid: ")
-    except ValueError:
-        print("API ID bayad adad bashad.")
-    else:
-        worker = FinalWorker(api_id=api_id, api_hash=api_hash)
-        asyncio.run(worker.run())
+    print("--- Rah andazi Final Worker (Telethon) ---")
+    # چون اطلاعات از config.py خوانده می‌شود، نیازی به ورودی دستی نیست
+    asyncio.run(main())
