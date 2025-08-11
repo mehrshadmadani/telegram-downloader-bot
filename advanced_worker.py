@@ -27,7 +27,7 @@ class TelethonWorker:
     def get_video_metadata(self, file_path):
         try:
             command = ['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height,duration', '-of', 'json', file_path]
-            result = subprocess.run(command, capture_output=True, text=True, check=True)
+            result = subprocess.run(command, capture_output=True, text=True, check=True, timeout=30)
             data = json.loads(result.stdout)['streams'][0]
             return {'duration': int(float(data['duration'])), 'width': int(data['width']), 'height': int(data['height'])}
         except: return None
@@ -35,13 +35,11 @@ class TelethonWorker:
     def download_media(self, url, code, user_id):
         self.active_jobs[code] = {"user_id": user_id, "status": "Downloading..."}
         
-        # --- منطق دانلود هیبریدی برای اینستاگرام ---
         if "instagram.com" in url:
-            # تلاش اول: با API سریع
             logger.info(f"Trying API download for Instagram CODE: {code}")
             try:
                 api_url = f"https://api.majidapi.ir/instagram/download?url={url}&out=url&token={MAJID_API_TOKEN}"
-                api_response = requests.get(api_url, timeout=20)
+                api_response = requests.get(api_url, timeout=30)
                 api_response.raise_for_status()
                 data = api_response.json()
                 media_url = None
@@ -53,7 +51,7 @@ class TelethonWorker:
                 if media_url:
                     file_extension = ".jpg" if ".jpg" in media_url.split('?')[0] else ".mp4"
                     output_path = os.path.join(self.download_dir, f"{code}{file_extension}")
-                    media_response = requests.get(media_url, stream=True)
+                    media_response = requests.get(media_url, stream=True, timeout=1800) # Timeout 30 دقیقه
                     media_response.raise_for_status()
                     with open(output_path, 'wb') as f:
                         for chunk in media_response.iter_content(chunk_size=8192): f.write(chunk)
@@ -62,15 +60,17 @@ class TelethonWorker:
             except Exception as e:
                 logger.warning(f"API download failed for {code}: {e}. Falling back to yt-dlp.")
         
-        # --- تلاش دوم (Fallback) یا دانلود برای پلتفرم‌های دیگر ---
         logger.info(f"Using yt-dlp for CODE: {code}")
         output_path = os.path.join(self.download_dir, f"{code} - %(title).30s.%(ext)s")
+        base_opts = {'outtmpl': output_path, 'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None, 
+                     'ignoreerrors': True, 'quiet': True, 'no_warnings': True, 'socket_timeout': 1800} # Timeout 30 دقیقه
+
         if "instagram.com" in url or "soundcloud.com" in url or "spotify" in url:
-             ydl_opts = {'outtmpl': output_path, 'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None, 'format': 'bestaudio/best' if "soundcloud" in url or "spotify" in url else 'best', 'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3'}] if "soundcloud" in url or "spotify" in url else []}
+             ydl_opts = {'format': 'bestaudio/best' if "soundcloud" in url or "spotify" in url else 'best', 'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3'}] if "soundcloud" in url or "spotify" in url else []}
         else: # YouTube
-            ydl_opts = {'outtmpl': output_path, 'format': 'bestvideo[height<=720]+bestaudio/best[height<=720]/best', 'merge_output_format': 'mp4', 'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None}
+            ydl_opts = {'format': 'bestvideo[height<=720]+bestaudio/best[height<=720]/best', 'merge_output_format': 'mp4'}
         
-        ydl_opts.update({'ignoreerrors': True, 'quiet': True, 'no_warnings': True})
+        ydl_opts.update(base_opts)
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url])
@@ -124,7 +124,7 @@ class TelethonWorker:
     async def run(self):
         await self.app.start(phone=self.phone)
         me = await self.app.get_me()
-        logger.info(f"Worker (Hybrid) ba movaffaghiat be onvane {me.first_name} vared shod.")
+        logger.info(f"Worker (Timeout Version) ba movaffaghiat be onvane {me.first_name} vared shod.")
         target_chat_id = GROUP_ID; target_topic_id = ORDER_TOPIC_ID
         try: entity = await self.app.get_entity(target_chat_id)
         except Exception as e: logger.critical(f"Nemitavan be Group ID dastresi peyda kard. Khata: {e}"); return
@@ -141,4 +141,4 @@ class TelethonWorker:
 async def main():
     worker = TelethonWorker(api_id=TELEGRAM_API_ID, api_hash=TELEGRAM_API_HASH, phone=TELEGRAM_PHONE); await worker.run()
 if __name__ == "__main__":
-    print("--- Rah andazi Hybrid Worker ---"); asyncio.run(main())
+    print("--- Rah andazi Timeout Worker ---"); asyncio.run(main())
