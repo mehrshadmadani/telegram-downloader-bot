@@ -83,7 +83,6 @@ class TelethonWorker:
                 for chunk in r.iter_content(chunk_size=8192): f.write(chunk)
         return file_path
 
-    # --- توابع دانلودر آبشاری برای پست و ریلز ---
     def _try_instagrapi_post(self, url, code):
         logger.info(f"[{code}] Attempt 1: Instagrapi (Post/Reel)")
         if not self.instagrapi_client: raise Exception("Instagrapi client not logged in.")
@@ -175,14 +174,12 @@ class TelethonWorker:
         return [], None, None
 
     def download_instagram_story_or_highlight(self, url, code):
-        # برای استوری و هایلایت، کتابخانه‌ها بهترین گزینه هستند و سپس API ها
         methods = [self._try_instagrapi_post, self._try_instaloader_post, self._try_majidapi, self._try_nestcode_api]
         for method_func in methods:
             try:
                 file_paths, caption, method_name = method_func(url, code)
                 if file_paths:
                     logger.info(f"✅ [{code}] Successfully downloaded story/highlight using {method_name}.")
-                    # کپشن استوری معمولا خالی است، یک کپشن پیشفرض میسازیم
                     if not caption: caption = f"Story/Highlight content"
                     return file_paths, caption, method_name
             except Exception as e:
@@ -301,11 +298,16 @@ class TelethonWorker:
             if code in self.active_jobs:
                 self.active_jobs[code].update({"status": "Failed", "error": error_short[:70]})
             logger.error(f"[{code}] Job failed entirely. Error: {error_short}")
+            try:
+                failure_message = f"❌ JOB FAILED\nCODE: {code}\nREASON: {error_short}"
+                await self.app.send_message(message.chat_id, failure_message, reply_to=message.id)
+            except Exception as notify_e:
+                logger.error(f"[{code}] Could not notify main bot about failure. Error: {notify_e}")
 
     async def display_dashboard(self):
         while True:
             os.system('clear' if os.name == 'posix' else 'cls')
-            print("--- 🚀 Advanced Downloader Dashboard (v6 - All-In-One) 🚀 ---")
+            print("--- 🚀 Advanced Downloader Dashboard (Final) 🚀 ---")
             print(f"{'Job Code':<12} | {'User ID':<12} | {'Status':<50}")
             print("-" * 80)
             if not self.active_jobs: print("... Waiting for new jobs ...")
@@ -324,7 +326,7 @@ class TelethonWorker:
         try:
             await self.app.start(phone=self.phone)
             me = await self.app.get_me()
-            logger.info(f"Worker (v6 - All-In-One) successfully logged in as {me.first_name}")
+            logger.info(f"Worker (Final) successfully logged in as {me.first_name}")
         except Exception as e:
             logger.critical(f"Could not start the worker. Error: {e}")
             return
@@ -343,6 +345,6 @@ class TelethonWorker:
                 await asyncio.sleep(30)
 
 if __name__ == "__main__":
-    logger.info("--- Starting Final Worker (v6 - All-In-One) ---")
+    logger.info("--- Starting Final Worker ---")
     worker = TelethonWorker(TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_PHONE)
     asyncio.run(worker.run())
