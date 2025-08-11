@@ -1,7 +1,8 @@
 import psycopg2
 import random
 import string
-import base64 # کتابخانه جدید برای کدگشایی کپشن
+import base64
+import re # کتابخانه جدید برای تحلیل متن
 from functools import wraps
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes, CallbackQueryHandler
@@ -10,7 +11,7 @@ from telegram.error import BadRequest
 from config import (BOT_TOKEN, GROUP_ID, DB_NAME, DB_USER, DB_PASS, 
                     DB_HOST, DB_PORT, ORDER_TOPIC_ID, LOG_TOPIC_ID, ADMIN_IDS, FORCED_JOIN_CHANNELS)
 
-# ... (کلاس PostgresDB و دکوراتور membership_required بدون تغییر) ...
+# ... (کلاس PostgresDB و دکوراتور membership_required بدون تغییر اینجا قرار میگیرد) ...
 class PostgresDB:
     def __init__(self):
         self.conn_params = {"dbname": DB_NAME, "user": DB_USER, "password": DB_PASS, "host": DB_HOST, "port": DB_PORT}
@@ -78,7 +79,7 @@ def membership_required(func):
 class AdvancedBot:
     def __init__(self, token, group_id, order_topic_id, log_topic_id, admin_ids):
         self.token = token; self.group_id = int(group_id); self.order_topic_id = int(order_topic_id); self.log_topic_id = int(log_topic_id); self.admin_ids = admin_ids; self.db = PostgresDB(); self.app = Application.builder().token(self.token).build()
-
+    
     @membership_required
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user; is_new_user = self.db.add_user_if_not_exists(user)
@@ -110,7 +111,8 @@ class AdvancedBot:
     @membership_required
     async def handle_url(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user; self.db.add_user_if_not_exists(user)
-        url = update.message.text.strip(); code = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
+        url = update.message.text.strip()
+        code = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
         self.db.add_job(code, user.id, url)
         message_for_worker = f"⬇️ NEW JOB\nURL: {url}\nCODE: {code}\nUSER_ID: {user.id}"
         await context.bot.send_message(chat_id=self.group_id, text=message_for_worker, message_thread_id=self.order_topic_id)
@@ -120,29 +122,42 @@ class AdvancedBot:
         if not update.message or update.message.message_thread_id != self.order_topic_id or "CODE:" not in update.message.caption: return
         try:
             caption_lines = update.message.caption.split('\n')
-            
-            # استخراج اطلاعات از کپشن ورکر
-            info = {}
-            for line in caption_lines:
-                if ":" in line:
-                    key, value = line.split(":", 1)
-                    info[key.strip()] = value.strip()
+            info = {line.split(":", 1)[0].strip(): line.split(":", 1)[1].strip() for line in caption_lines if ":" in line}
 
             code = info.get("CODE")
             size = int(info.get("SIZE", 0))
-            item_info = info.get("✅ Uploaded", "") # گرفتن اطلاعات شماره اسلاید
-            
             user_id = self.db.get_user_by_code(code)
             if not user_id: return
             
             self.db.update_job_on_complete(code, 'completed', size)
             
-            final_caption = f"🎉 **دانلود شما آماده‌ست!** {item_info}"
+            # --- ساخت کپشن جدید و حرفه‌ای ---
+            caption_parts = []
             
-            # اگر کپشن اصلی وجود داشت، آن را به پیام اضافه کن
+            # 1. اضافه کردن کپشن اصلی (اگر وجود داشته باشد)
             if "CAPTION" in info:
-                decoded_caption = base64.b64decode(info["CAPTION"]).decode('utf-8')
-                final_caption += f"\n\n— *کپشن اصلی* —\n{decoded_caption}"
+                try:
+                    decoded_caption = base64.b64decode(info["CAPTION"]).decode('utf-8').strip()
+                    if decoded_caption: caption_parts.append(decoded_caption)
+                except: pass
+
+            # 2. اضافه کردن شماره اسلاید (فقط برای پست‌های چندتایی)
+            item_info_str = info.get("✅ Uploaded", "")
+            match = re.search(r'\((\d+)/(\d+)\)', item_info_str)
+            if match:
+                current_item, total_items = int(match.group(1)), int(match.group(2))
+                if total_items > 1:
+                    caption_parts.append(f"اسلاید {current_item}")
+
+            # 3. اضافه کردن فوتر دائمی
+            footer = (
+                "—————————————————\n"
+                "🍭 Download by [CokaDownloader](https://t.me/parsvip0_bot?start=0)\n"
+                "• Get anything, anytime!"
+            )
+            caption_parts.append(footer)
+            final_caption = "\n\n".join(caption_parts)
+            # --- پایان ساخت کپشن ---
 
             if update.message.video: await context.bot.send_video(chat_id=user_id, video=update.message.video.file_id, caption=final_caption, parse_mode='Markdown')
             elif update.message.audio: await context.bot.send_audio(chat_id=user_id, audio=update.message.audio.file_id, caption=final_caption, parse_mode='Markdown')
@@ -155,13 +170,14 @@ class AdvancedBot:
         await self.start_command(update, context)
 
     def run(self):
+        # ... (بقیه تابع run بدون تغییر) ...
         self.app.add_handler(CommandHandler("start", self.start_command))
         self.app.add_handler(CommandHandler("manage", self.manage_command))
         self.app.add_handler(CallbackQueryHandler(self.stats_callback, pattern="^bot_stats$"))
         self.app.add_handler(CallbackQueryHandler(self.check_membership_callback, pattern="^check_membership$"))
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_url))
         self.app.add_handler(MessageHandler((filters.VIDEO | filters.AUDIO | filters.PHOTO | filters.Document.ALL) & filters.Chat(self.group_id) & filters.CAPTION, self.handle_group_files))
-        print("🚀 Bot is running with Caption Support..."); self.app.run_polling()
+        print("🚀 Bot is running with Final Captions..."); self.app.run_polling()
         
 if __name__ == "__main__":
     bot = AdvancedBot(token=BOT_TOKEN, group_id=GROUP_ID, order_topic_id=ORDER_TOPIC_ID, log_topic_id=LOG_TOPIC_ID, admin_ids=ADMIN_IDS)
