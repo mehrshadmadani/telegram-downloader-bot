@@ -3,4 +3,4 @@ telethon
 yt-dlp
 psycopg2-binary
 requests
-instaloader
+instagrapi
