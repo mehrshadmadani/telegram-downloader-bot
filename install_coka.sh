@@ -95,92 +95,112 @@ update_manager() {
     fi
 }
 
-show_panel_and_menu() {
-    # Using 'clear' provides the most stable cross-platform experience
-    clear
-    
+show_panel() {
+    # Step 1: Gather all data first
     SERVER_IP=\$(hostname -I | cut -d' ' -f1)
     CPU_USAGE=\$(top -bn1 | grep "Cpu(s)" | sed "s/.*, *\([0-9.]*\)%* id.*/\1/" | awk '{print 100 - \$1"%%"}')
     MEM_INFO=\$(free -m | awk 'NR==2{printf "%.2f/%.2f GB (%.0f%%)", \$3/1024, \$2/1024, \$3*100/\$2 }')
     DISK_INFO=\$(df -h / | awk 'NR==2{printf "%s / %s (%s)", \$3, \$2, \$5}')
-    
-    echo -e "\e[1;35m
-╔════════════════════════════════════════════════════╗
-║             COKA BOT CONTROL PANEL                 ║
-╚════════════════════════════════════════════════════╝\e[0m"
-    echo -e "  \e[1mCPU:\e[0m \e[1;37m\$CPU_USAGE \e[1m| RAM:\e[0m \e[1;37m\$MEM_INFO \e[1m| Disk:\e[0m \e[1;37m\$DISK_INFO"
-    echo -e "\e[2m----------------------------------------------------------\e[0m"
-    echo -e "  \e[1mServer IP:\e[0m \e[33m\$SERVER_IP\e[0m  \e[1mManager:\e[0m \e[36mv\$VERSION\e[0m"
+    INTERFACE=\$(ip -o -4 route show to default | awk '{print \$5}' | head -1)
+    if [ -z "\$INTERFACE" ]; then
+        RX_FORMATTED="N/A"
+        TX_FORMATTED="N/A"
+    else
+        RX_BYTES_1=\$(cat /sys/class/net/\$INTERFACE/statistics/rx_bytes)
+        TX_BYTES_1=\$(cat /sys/class/net/\$INTERFACE/statistics/tx_bytes)
+        sleep 1
+        RX_BYTES_2=\$(cat /sys/class/net/\$INTERFACE/statistics/rx_bytes)
+        TX_BYTES_2=\$(cat /sys/class/net/\$INTERFACE/statistics/tx_bytes)
+        RX_SPEED=\$((RX_BYTES_2 - RX_BYTES_1))
+        TX_SPEED=\$((TX_BYTES_2 - TX_BYTES_1))
+        RX_FORMATTED=\$(awk -v speed=\$RX_SPEED 'BEGIN { if (speed > 1024*1024) printf "%.2f MB/s", speed/(1024*1024); else if (speed > 1024) printf "%.2f KB/s", speed/1024; else printf "%d B/s", speed }')
+        TX_FORMATTED=\$(awk -v speed=\$TX_SPEED 'BEGIN { if (speed > 1024*1024) printf "%.2f MB/s", speed/(1024*1024); else if (speed > 1024) printf "%.2f KB/s", speed/1024; else printf "%d B/s", speed }')
+    fi
     if is_running "\$WORKER_SCREEN_NAME"; then W_STATUS="\e[1;32mRUNNING\e[0m"; else W_STATUS="\e[1;31mSTOPPED\e[0m"; fi
     if is_running "\$MAIN_BOT_SCREEN_NAME"; then M_STATUS="\e[1;32mRUNNING\e[0m"; else M_STATUS="\e[1;31mSTOPPED\e[0m"; fi
+
+    # Step 2: Move cursor to top-left instead of clearing
+    echo -ne "\033[H\033[2J"
+
+    # Step 3: Print all pre-gathered data instantly
+    echo -e "\e[1;35m
+╔═════════════════════════════════════════════════════════════════════════════╗
+║                          COKA BOT CONTROL PANEL                             ║
+╚═════════════════════════════════════════════════════════════════════════════╝\e[0m"
+    echo -e "  \e[1mCPU:\e[0m \e[1;37m\$CPU_USAGE \e[1m| RAM:\e[0m \e[1;37m\$MEM_INFO \e[1m| Disk:\e[0m \e[1;37m\$DISK_INFO"
+    echo -e "  \e[1mNetwork (\${INTERFACE}):\e[0m \e[1;37m↓ \$RX_FORMATTED | ↑ \$TX_FORMATTED"
+    echo -e "\e[2m-------------------------------------------------------------------------------\e[0m"
+    echo -e "  \e[1mServer IP:\e[0m \e[33m\$SERVER_IP\e[0m  \e[1mManager:\e[0m \e[36mv\$VERSION\e[0m"
     echo -e "  \e[1mWorker Status:\e[0m \$W_STATUS   \e[1mMain Bot Status:\e[0m \$M_STATUS"
-    echo -e "\e[2m----------------------------------------------------------\e[0m"
+    echo -e "\e[2m-------------------------------------------------------------------------------\e[0m"
 }
 
 worker_menu() {
     while true; do
-        show_panel_and_menu
+        show_panel
         echo "  Worker Manager Menu:"
-        echo "  [1] Start / Restart"
-        echo "  [2] Stop"
+        echo "  [1] Start / Restart Worker"
+        echo "  [2] Stop Worker"
         echo "  [3] View Live Dashboard"
         echo "  [4] View Log File"
         echo "  [0] Back to Main Menu"
-        echo -e "\e[2m----------------------------------------------------------\e[0m"
-        read -p "  Enter your choice: " choice
+        echo -e "\e[2m-------------------------------------------------------------------------------\e[0m"
+        read -t 2 -N 1 -p "  Enter your choice (refreshes automatically): " choice
+        if [ -z "\$choice" ]; then continue; fi
         case \$choice in
-            1) start_service "Worker" "\$WORKER_SCREEN_NAME" "advanced_worker.py" ;;
-            2) stop_service "Worker" "\$WORKER_SCREEN_NAME" ;;
+            1) start_service "Worker" "\$WORKER_SCREEN_NAME" "advanced_worker.py"; echo; read -p "Press [Enter]...";;
+            2) stop_service "Worker" "\$WORKER_SCREEN_NAME"; echo; read -p "Press [Enter]...";;
             3) print_warning "To detach, press Ctrl+A then D."; sleep 2; screen -r "\$WORKER_SCREEN_NAME" ;;
             4) tail -f bot.log ;;
             0) return ;;
-            *) print_error "Invalid option." ;;
+            *) print_error "Invalid option.";;
         esac
-        echo; read -p "Press [Enter] to continue..."
     done
 }
 
 main_bot_menu() {
-    while true; do
-        show_panel_and_menu
+     while true; do
+        show_panel
         echo "  Main Bot Manager Menu:"
-        echo "  [1] Start / Restart"
-        echo "  [2] Stop"
+        echo "  [1] Start / Restart Main Bot"
+        echo "  [2] Stop Main Bot"
         echo "  [3] View Log File"
         echo "  [0] Back to Main Menu"
-        echo -e "\e[2m----------------------------------------------------------\e[0m"
-        read -p "  Enter your choice: " choice
+        echo -e "\e[2m-------------------------------------------------------------------------------\e[0m"
+        read -t 2 -N 1 -p "  Enter your choice (refreshes automatically): " choice
+        if [ -z "\$choice" ]; then continue; fi
         case \$choice in
-            1) start_service "Main Bot" "\$MAIN_BOT_SCREEN_NAME" "main_bot.py" ;;
-            2) stop_service "Main Bot" "\$MAIN_BOT_SCREEN_NAME" ;;
+            1) start_service "Main Bot" "\$MAIN_BOT_SCREEN_NAME" "main_bot.py"; echo; read -p "Press [Enter]...";;
+            2) stop_service "Main Bot" "\$MAIN_BOT_SCREEN_NAME"; echo; read -p "Press [Enter]...";;
             3) tail -f main_bot.log ;;
             0) return ;;
-            *) print_error "Invalid option." ;;
+            *) print_error "Invalid option.";;
         esac
-        echo; read -p "Press [Enter] to continue..."
     done
 }
 
 main_menu() {
     while true; do
-        show_panel_and_menu
+        show_panel
         echo "  Main Menu:"
         echo "  [1] Worker Manager"
         echo "  [2] Main Bot Manager"
         echo "  [3] Update This Manager (coka)"
         echo "  [0] Quit"
-        echo -e "\e[2m----------------------------------------------------------\e[0m"
-        read -p "  Enter your choice: " choice
+        echo -e "\e[2m-------------------------------------------------------------------------------\e[0m"
+        read -t 2 -N 1 -p "  Enter your choice (refreshes automatically): " choice
+        if [ -z "\$choice" ]; then continue; fi
         case \$choice in
             1) worker_menu ;;
             2) main_bot_menu ;;
             3) update_manager; exit 0 ;;
             0) echo "Exiting."; clear; exit 0 ;;
-            *) print_error "Invalid option." ;;
+            *) print_error "Invalid option.";;
         esac
     done
 }
 
+# --- Main Script ---
 cd "\$BOT_DIR" || { print_error "Directory not found: \$BOT_DIR"; exit 1; }
 main_menu
 EOF
