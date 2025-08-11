@@ -21,8 +21,8 @@ logging.getLogger("telethon").setLevel(logging.WARNING)
 
 class TelethonWorker:
     def __init__(self, api_id, api_hash, phone):
-        self.app = TelegramClient("telethon_session", api_id, api_hash)
-        self.phone = phone; self.download_dir = "downloads"; os.makedirs(self.download_dir, exist_ok=True)
+        self.app = TelegramClient("telethon_session", api_id, api_hash); self.phone = phone
+        self.download_dir = "downloads"; os.makedirs(self.download_dir, exist_ok=True)
         self.processed_ids = set(); self.start_time = datetime.now(timezone.utc); self.active_jobs = {}
         self.instagrapi_client = InstagrapiClient()
         session_file = "insta_session.json"
@@ -60,51 +60,25 @@ class TelethonWorker:
                     self.active_jobs[code]["status"] = "Downloaded"; return (final_path, "instagrapi")
             except Exception as e: logger.warning(f"instagrapi failed for {code}: {e}")
             
-            # 2. تلاش با yt-dlp (به عنوان روش کتابخانه‌ای اصلی دوم)
+            # 2. تلاش با MajidAPI
             try:
-                logger.info(f"Attempt 2 (yt-dlp) for CODE: {code}")
-                output_path_yt = os.path.join(self.download_dir, f"{code}-%(ext)s")
-                ydl_opts = {'outtmpl': output_path_yt, 'cookiefile': 'cookies.txt', 'format': 'best', 'ignoreerrors': True, 'quiet': True, 'no_warnings': True, 'socket_timeout': 1800}
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    ydl.download([url])
-                    for f in os.listdir(self.download_dir):
-                        if f.startswith(code): self.active_jobs[code]["status"] = "Downloaded"; return (os.path.join(self.download_dir, f), "yt-dlp")
-            except Exception as e: logger.warning(f"yt-dlp failed for {code}: {e}")
-
-            # 3. تلاش با MajidAPI
-            try:
-                logger.info(f"Attempt 3 (MajidAPI) for CODE: {code}")
+                logger.info(f"Attempt 2 (MajidAPI) for CODE: {code}")
                 api_url = f"https://api.majidapi.ir/instagram/download?url={url}&out=url&token={MAJID_API_TOKEN}"
                 api_response = requests.get(api_url, timeout=20); data = api_response.json()
                 if data.get("status") == 200:
                     result = data.get("result", {}); media_url = result.get("video") or result.get("image")
                     if media_url:
-                        ext = ".jpg" if ".jpg" in media_url.split('?')[0] else ".mp4"; output_path = os.path.join(self.download_dir, f"{code}{ext}")
                         media_res = requests.get(media_url, stream=True, timeout=1800)
+                        content_type = media_res.headers.get('content-type', '')
+                        ext = ".jpg" if "image" in content_type else ".mp4"
+                        output_path = os.path.join(self.download_dir, f"{code}{ext}")
                         with open(output_path, 'wb') as f:
                             for chunk in media_res.iter_content(chunk_size=8192): f.write(chunk)
                         self.active_jobs[code]["status"] = "Downloaded"; return (output_path, "MajidAPI")
             except Exception as e: logger.warning(f"MajidAPI failed for {code}: {e}")
 
-            # 4. تلاش نهایی با NestCode API
-            try:
-                logger.info(f"Final Attempt (NestCode API) for CODE: {code}")
-                api_url = f"https://open.nestcode.org/apis-1/InstagramDownloader?url={url}&key={NESTCODE_API_KEY}"
-                api_response = requests.get(api_url, timeout=30); data = api_response.json()
-                if data.get("status") == "success":
-                    medias = data.get("data", {}).get("medias")
-                    if medias and isinstance(medias, list):
-                        get_file_url = medias[0];
-                        content_type = requests.head(get_file_url).headers.get('content-type', '')
-                        ext = ".jpg" if "image" in content_type else ".mp4"
-                        output_path = os.path.join(self.download_dir, f"{code}{ext}")
-                        media_res = requests.get(get_file_url, stream=True, timeout=1800)
-                        with open(output_path, 'wb') as f:
-                            for chunk in media_res.iter_content(chunk_size=8192): f.write(chunk)
-                        self.active_jobs[code]["status"] = "Downloaded"; return (output_path, "NestCode API")
-            except Exception as e: logger.error(f"All methods failed. Last error from NestCode API: {e}")
+        # --- منطق دانلود برای پلتفرم‌های دیگر ---
         else:
-            # منطق دانلود برای پلتفرم‌های دیگر
             try:
                 logger.info(f"Using yt-dlp for {url.split('/')[2]} CODE: {code}")
                 output_path = os.path.join(self.download_dir, f"{code} - %(title).30s.%(ext)s")
@@ -120,11 +94,11 @@ class TelethonWorker:
         
         self.active_jobs[code]["status"] = "Download Failed"; return (None, None)
 
+    # ... (بقیه توابع کلاس بدون تغییر) ...
     async def upload_progress(self, sent_bytes, total_bytes, code):
         percentage = int(sent_bytes * 100 / total_bytes);
         if percentage % 10 == 0 or percentage == 100:
             if code in self.active_jobs: self.active_jobs[code]["status"] = f"Uploading: {percentage}%"
-    
     async def process_job(self, message):
         if message.id in self.processed_ids: return
         self.processed_ids.add(message.id)
@@ -150,9 +124,7 @@ class TelethonWorker:
             except: self.active_jobs[code]["status"] = "Upload Failed"
             finally:
                 if os.path.exists(file_path): os.remove(file_path)
-
     async def display_dashboard(self):
-        # ... (بدون تغییر) ...
         while True:
             os.system('clear' if os.name == 'posix' else 'cls'); print("--- 🚀 Advanced Downloader Dashboard 🚀 ---")
             print(f"{'Job Code':<12} | {'User ID':<12} | {'Status':<20}"); print("-" * 50)
@@ -163,11 +135,10 @@ class TelethonWorker:
                     if data.get('status') in ["Completed", "Download Failed", "Upload Failed"]:
                         await asyncio.sleep(5); self.active_jobs.pop(code, None)
             print("-" * 50); print(f"Last Update: {datetime.now().strftime('%H:%M:%S')}"); await asyncio.sleep(1)
-
     async def run(self):
         await self.app.start(phone=self.phone)
         me = await self.app.get_me()
-        logger.info(f"Worker (Optimized Order) ba movaffaghiat be onvane {me.first_name} vared shod.")
+        logger.info(f"Worker (Ultimate Version) ba movaffaghiat be onvane {me.first_name} vared shod.")
         target_chat_id = GROUP_ID; target_topic_id = ORDER_TOPIC_ID
         try: entity = await self.app.get_entity(target_chat_id)
         except Exception as e: logger.critical(f"Nemitavan be Group ID dastresi peyda kard. Khata: {e}"); return
@@ -186,5 +157,5 @@ async def main():
     await worker.run()
 
 if __name__ == "__main__":
-    print("--- Rah andazi Optimized Worker ---")
+    print("--- Rah andazi Ultimate Worker ---")
     asyncio.run(main())
