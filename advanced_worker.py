@@ -13,7 +13,16 @@ from config import (TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_PHONE,
                     GROUP_ID, ORDER_TOPIC_ID, MAJID_API_TOKEN, 
                     INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# --- سیستم لاگ‌گیری حرفه‌ای ---
+# تمام لاگ‌ها با جزئیات در این فایل ذخیره می‌شوند
+log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(name)s - %(message)s')
+log_handler = logging.FileHandler('worker_debug.log')
+log_handler.setFormatter(log_formatter)
+# گرفتن لاگر اصلی برای ذخیره لاگ‌های کتابخانه‌های دیگر
+logging.getLogger().addHandler(log_handler)
+logging.getLogger().setLevel(logging.INFO)
+
+# لاگر مخصوص خودمان برای پیام‌های اصلی
 logger = logging.getLogger(__name__)
 
 class TelethonWorker:
@@ -25,12 +34,9 @@ class TelethonWorker:
         self.processed_ids = set()
         self.start_time = datetime.now(timezone.utc)
         self.active_jobs = {}
-        # --- اصلاحیه: حذف پارامتر اضافی video_thumbnails ---
         self.insta_loader = instaloader.Instaloader(
             dirname_pattern=os.path.join(self.download_dir, "{target}"),
-            save_metadata=False,
-            compress_json=False,
-            post_metadata_txt_pattern=""
+            save_metadata=False, compress_json=False, post_metadata_txt_pattern=""
         )
         try:
             logger.info("Logging into Instagram...")
@@ -39,17 +45,15 @@ class TelethonWorker:
         except Exception as e:
             logger.error(f"Failed to login to Instagram: {e}")
 
+    # ... (بقیه توابع کلاس بدون هیچ تغییری) ...
     def get_video_metadata(self, file_path):
         try:
             command = ['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height,duration', '-of', 'json', file_path]
-            result = subprocess.run(command, capture_output=True, text=True, check=True, timeout=30)
-            data = json.loads(result.stdout)['streams'][0]
+            result = subprocess.run(command, capture_output=True, text=True, check=True, timeout=30); data = json.loads(result.stdout)['streams'][0]
             return {'duration': int(float(data['duration'])), 'width': int(data['width']), 'height': int(data['height'])}
         except: return None
-
     def download_media(self, url, code, user_id):
         self.active_jobs[code] = {"user_id": user_id, "status": "Downloading..."}
-        
         if "instagram.com" in url:
             try:
                 logger.info(f"Attempt 1 (API) for CODE: {code}")
@@ -64,7 +68,6 @@ class TelethonWorker:
                             for chunk in media_res.iter_content(chunk_size=8192): f.write(chunk)
                         self.active_jobs[code]["status"] = "Downloaded"; return output_path
             except Exception as e: logger.warning(f"API failed for {code}: {e}. Falling back to Instaloader.")
-
             try:
                 logger.info(f"Attempt 2 (Instaloader) for CODE: {code}")
                 shortcode = url.split('/')[-2]
@@ -76,12 +79,10 @@ class TelethonWorker:
                         src = os.path.join(downloaded_folder, filename)
                         final_path = os.path.join(self.download_dir, f"{code}{os.path.splitext(filename)[1]}")
                         os.rename(src, final_path)
-                        # پاک کردن پوشه و فایل‌های اضافی
                         for f_extra in os.listdir(downloaded_folder): os.remove(os.path.join(downloaded_folder, f_extra))
                         os.rmdir(downloaded_folder)
                         self.active_jobs[code]["status"] = "Downloaded"; return final_path
             except Exception as e: logger.error(f"Instaloader also failed for CODE {code}: {e}")
-        
         else:
             logger.info(f"Using yt-dlp for CODE: {code}")
             output_path = os.path.join(self.download_dir, f"{code} - %(title).30s.%(ext)s")
@@ -95,10 +96,7 @@ class TelethonWorker:
                     for f in os.listdir(self.download_dir):
                         if f.startswith(code): return os.path.join(self.download_dir, f)
             except Exception as e: logger.error(f"yt-dlp download failed for CODE {code}: {e}")
-
         self.active_jobs[code]["status"] = "Download Failed"; return None
-    
-    # ... (بقیه توابع کلاس بدون تغییر) ...
     async def upload_progress(self, sent_bytes, total_bytes, code):
         percentage = int(sent_bytes * 100 / total_bytes);
         if percentage % 10 == 0 or percentage == 100:
