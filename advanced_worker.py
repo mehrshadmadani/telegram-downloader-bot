@@ -93,7 +93,6 @@ class TelethonWorker:
 
     def download_from_instagram(self, url, code):
         """برای دانلود از اینستاگرام ابتدا با instagrapi و سپس با yt-dlp تلاش می‌کند."""
-        # تلاش اول با instagrapi
         if self.instagrapi_client:
             try:
                 logger.info(f"➡️ [{code}] Attempt 1 (instagrapi) for Instagram.")
@@ -105,11 +104,11 @@ class TelethonWorker:
                 downloaded_files = []
                 for i, res in enumerate(resources):
                     dl_path = None
-                    file_ext = ".jpg" # Default extension for photos
-                    if res.get("media_type") == 2 and res.get('video_url'): # Video
+                    file_ext = ".jpg"
+                    if res.get("media_type") == 2 and res.get('video_url'):
                         dl_path = self.instagrapi_client.video_download(res['pk'], self.download_dir)
                         file_ext = os.path.splitext(dl_path)[1] if dl_path else ".mp4"
-                    elif res.get("media_type") == 1 and res.get('thumbnail_url'): # Photo
+                    elif res.get("media_type") == 1 and res.get('thumbnail_url'):
                         dl_path = self.instagrapi_client.photo_download(res['pk'], self.download_dir)
                         file_ext = os.path.splitext(dl_path)[1] if dl_path else ".jpg"
                     
@@ -124,7 +123,6 @@ class TelethonWorker:
             except Exception as e:
                 logger.warning(f"⚠️ [{code}] instagrapi failed: {e}. Falling back to yt-dlp.")
         
-        # تلاش دوم با yt-dlp
         return self.download_with_yt_dlp(url, code)
 
     async def upload_single_file(self, message, file_path, code, download_method, index, total, final_caption):
@@ -202,7 +200,51 @@ class TelethonWorker:
             self.active_jobs[code]["status"] = "Download Failed"
             logger.error(f"❌ [{code}] All download methods failed. Job ended.")
 
-    # ... (توابع display_dashboard و run بدون تغییر) ...
+    async def display_dashboard(self):
+        """داشبورد وضعیت کارها را در کنسول نمایش می‌دهد."""
+        while True:
+            os.system('clear' if os.name == 'posix' else 'cls')
+            print("--- 🚀 Advanced Downloader Dashboard 🚀 ---")
+            print(f"{'Job Code':<12} | {'User ID':<12} | {'Status':<30}")
+            print("-" * 60)
+            if not self.active_jobs:
+                print("... Waiting for new jobs ...")
+            else:
+                for code, data in list(self.active_jobs.items()):
+                    print(f"{code:<12} | {data.get('user_id', 'N/A'):<12} | {data.get('status', 'N/A'):<30}")
+                    if data.get('status') in ["Completed", "Download Failed"]:
+                        await asyncio.sleep(5)
+                        self.active_jobs.pop(code, None)
+            print("-" * 60)
+            print(f"Last Update: {datetime.now().strftime('%H:%M:%S')}")
+            await asyncio.sleep(2)
+
+    async def run(self):
+        """کلاس ورکر را راه‌اندازی و اجرا می‌کند."""
+        await self.app.start(phone=self.phone)
+        me = await self.app.get_me()
+        logger.info(f"✅ Worker (Final Version) successfully logged in as {me.first_name}")
+        
+        try:
+            entity = await self.app.get_entity(GROUP_ID)
+        except Exception as e:
+            logger.critical(f"❌ Could not access Group ID ({GROUP_ID}). Check the ID and your membership. Error: {e}")
+            return
+
+        dashboard_task = asyncio.create_task(self.display_dashboard())
+        logger.info(f"👂 Worker started listening in Topic ID {ORDER_TOPIC_ID}...")
+
+        while True:
+            try:
+                async for message in self.app.iter_messages(entity=entity, reply_to=ORDER_TOPIC_ID, limit=20):
+                    if message.date < self.start_time:
+                        break
+                    if message.text and "⬇️ NEW JOB" in message.text:
+                        asyncio.create_task(self.process_job(message))
+                await asyncio.sleep(5)
+            except Exception as e:
+                logger.error(f"🚨 An error occurred in the main loop: {e}", exc_info=True)
+                await asyncio.sleep(30)
 
 if __name__ == "__main__":
     worker = TelethonWorker(TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_PHONE)
