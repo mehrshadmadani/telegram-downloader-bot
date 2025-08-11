@@ -19,7 +19,7 @@ from config import (TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_PHONE,
                     GROUP_ID, ORDER_TOPIC_ID, MAJID_API_TOKEN,
                     INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD, NESTCODE_API_KEY)
 
-# --- سیستم لاگ‌گیری پیشرفته ---
+# --- سیستم لاگ‌گیری ---
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - [%(funcName)s] - %(message)s')
@@ -134,7 +134,10 @@ class TelethonWorker:
         api_url = f"https://api.majidapi.ir/instagram/download?url={url}&out=url&token={MAJID_API_TOKEN}"
         data = requests.get(api_url, timeout=30).json()
         if data.get("status") != 200: raise Exception(f"MajidAPI Error: {data.get('result')}")
-        result, caption = data.get("result", {}), result.get("caption", "")
+        
+        result = data.get("result", {})
+        caption = result.get("caption", "")
+        
         media_urls = result.get("carousel") or ([result.get("video")] if result.get("video") else []) or result.get("images")
         downloaded_files = []
         for i, media_url in enumerate(media_urls):
@@ -150,7 +153,10 @@ class TelethonWorker:
         api_url = f"https://open.nestcode.org/apis-1/InstagramDownloader?url={url}&key={NESTCODE_API_KEY}"
         data = requests.get(api_url, timeout=30).json()
         if data.get("status") != "success": raise Exception(f"NestCode API Error: {data.get('data')}")
-        result, caption = data.get("data", {}), result.get("caption", "")
+        
+        result = data.get("data", {})
+        caption = result.get("caption", "")
+
         media_urls = result.get("medias", [])
         downloaded_files = []
         for i, media_url in enumerate(media_urls):
