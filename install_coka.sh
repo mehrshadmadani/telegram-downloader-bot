@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # =============================================================
-#         Coka Bot Manager - Universal Smart Installer v31.0 (Final Stable)
+#         Coka Bot Manager - Universal Smart Installer v32.0 (Final Complete)
 # =============================================================
 
 COKA_SCRIPT_PATH="/usr/local/bin/coka"
@@ -40,7 +40,7 @@ if [ -f "$COKA_SCRIPT_PATH" ]; then
     fi
 else
     LATEST_VERSION=$(curl -sL "$VERSION_URL" | head -n 1)
-    if [ -z "$LATEST_VERSION" ]; then LATEST_VERSION="31.0 (Final Stable)"; fi
+    if [ -z "$LATEST_VERSION" ]; then LATEST_VERSION="32.0 (Final)"; fi
 fi
 
 # --- Interactive Setup ---
@@ -209,7 +209,6 @@ smart_update_config() {
     ADDED_COUNT=0
     for var in \$missing_vars; do
         print_info "New variable found: '\$var'. Adding to config.py..."
-        # This awk command finds the block for the variable and adds it
         awk -v var="^\$var\s*=" '/\s*# ---.*---/,/^\s*\$/ { if (\$0 ~ var) p=1; if (p) print; if (p && \$0 ~ /^\s*\$/) p=0 }' "\$TEMP_CONFIG" >> "\$LOCAL_CONFIG"
         echo "" >> "\$LOCAL_CONFIG"
         ADDED_COUNT=\$((ADDED_COUNT + 1))
@@ -218,6 +217,34 @@ smart_update_config() {
     print_success "\$ADDED_COUNT new variable(s) added to config.py."
     print_warning "Please edit the file to set their values: 'coka config edit'"
     rm -f "\$TEMP_CONFIG"
+}
+
+quick_update_config() {
+    local TEMP_CONFIG="/tmp/config_temp.py"
+    local LOCAL_CONFIG="\$BOT_DIR/config.py"
+    
+    echo "# Please paste your new full config content here." > "\$TEMP_CONFIG"
+    echo "# After saving and exiting, you will be asked for final confirmation." >> "\$TEMP_CONFIG"
+    
+    nano "\$TEMP_CONFIG"
+    
+    if [ ! -s "\$TEMP_CONFIG" ]; then
+        print_error "Temporary file is empty. Aborting."
+        rm -f "\$TEMP_CONFIG"
+        return
+    fi
+    
+    print_warning "You are about to REPLACE your current config.py with the content you just provided."
+    read -p "Are you absolutely sure? This cannot be undone. (y/n): " confirm
+    
+    if [[ "\$confirm" == "y" ]]; then
+        mv "\$TEMP_CONFIG" "\$LOCAL_CONFIG"
+        print_success "config.py has been updated successfully."
+        print_warning "Please restart the bots to apply the new settings."
+    else
+        rm -f "\$TEMP_CONFIG"
+        print_info "Quick update cancelled."
+    fi
 }
 
 # --- UI Functions ---
@@ -340,6 +367,7 @@ config_menu() {
         echo "  [1] View Config File"
         echo "  [2] Manual Edit (nano)"
         echo "  [3] Smart Update from GitHub"
+        echo "  [4] Quick Manual Update"
         echo "  [0] Back to Main Menu"
         echo -e "\e[2m----------------------------------------------------------\e[0m"
         read -p "  Enter your choice: " choice
@@ -347,6 +375,7 @@ config_menu() {
             1) print_info "Content of config.py:"; echo "---------------------------------"; cat -n "\$BOT_DIR/config.py"; echo "---------------------------------";;
             2) nano "\$BOT_DIR/config.py" ;;
             3) smart_update_config ;;
+            4) quick_update_config ;;
             0) return ;;
             *) print_error "Invalid option." ;;
         esac
