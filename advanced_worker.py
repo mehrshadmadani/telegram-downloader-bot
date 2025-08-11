@@ -3,7 +3,7 @@ import asyncio
 import logging
 import json
 import subprocess
-import requests
+import requests # اضافه کردن کتابخانه requests
 from datetime import datetime, timezone
 import yt_dlp
 from telethon import TelegramClient
@@ -24,6 +24,7 @@ class TelethonWorker:
         self.active_jobs = {}
 
     def get_video_metadata(self, file_path):
+        # ... (این تابع بدون تغییر است) ...
         try:
             command = ['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height,duration', '-of', 'json', file_path]
             result = subprocess.run(command, capture_output=True, text=True, check=True)
@@ -34,68 +35,72 @@ class TelethonWorker:
     def download_media(self, url, code, user_id):
         self.active_jobs[code] = {"user_id": user_id, "status": "Downloading..."}
         
-        if "instagram.com" in url:
-            try:
-                if "/p/" in url or "/reel/" in url or "/stories/" in url:
-                    api_url = f"https://api.majidapi.ir/instagram/download?url={url}&out=url&token=gmtbknlkxekej1p:KvnPibe8c0xzbz5U04Fj"
-                else:
-                    username = url.split("instagram.com/")[1].split("/")[0].strip()
-                    api_url = f"https://api.majidapi.ir/instagram/profile?username={username}&token=gmtbknlkxekej1p:KvnPibe8c0xzbz5U04Fj"
-
-                api_response = requests.get(api_url, timeout=30)
-                api_response.raise_for_status()
-                data = api_response.json()
+        # --- منطق دانلود هوشمند و جدید ---
+        try:
+            # اگر اینستاگرام بود، از API استفاده کن
+            if "instagram.com" in url:
+                api_url = f"https://api.majidapi.ir/api/instagram?url={url}"
+                response = requests.get(api_url, timeout=60).json()
                 
                 media_url = None
-                if data.get("status") == 200:
-                    result = data.get("result", {})
-                    if result.get("video"): media_url = result["video"]
-                    elif result.get("image"): media_url = result["image"]
-                    elif isinstance(result, list) and result and result[0].get("media"): media_url = result[0]["media"]
+                file_ext = ".jpg" # پیش‌فرض برای عکس
+                
+                if response.get("result"):
+                    if response["result"]["type"] == "photo" and response["result"]["images"]:
+                        media_url = response["result"]["images"][0]
+                    elif response["result"]["type"] == "video" and response["result"]["video"]:
+                        media_url = response["result"]["video"]
+                        file_ext = ".mp4"
 
-                if media_url:
-                    file_extension = ".jpg" if ".jpg" in media_url.split('?')[0] else ".mp4"
-                    output_path = os.path.join(self.download_dir, f"{code}{file_extension}")
-                    media_response = requests.get(media_url, stream=True)
-                    media_response.raise_for_status()
-                    with open(output_path, 'wb') as f:
-                        for chunk in media_response.iter_content(chunk_size=8192): f.write(chunk)
-                    self.active_jobs[code]["status"] = "Downloaded"
-                    return output_path
-                else:
-                    # --- تغییر کلیدی: چاپ کردن پاسخ کامل API در لاگ ---
-                    logger.error("API response did not contain a valid media URL. Full response:")
-                    logger.error(json.dumps(data, indent=2, ensure_ascii=False))
-                    raise Exception(f"Media URL not found in API response")
+                if not media_url:
+                    logger.error(f"API response did not contain a valid media URL. Full response:\n{json.dumps(response, indent=2)}")
+                    raise ValueError("Media URL not found in API response")
 
-            except Exception as e:
-                logger.error(f"Khata dar download Instagram (API) baraye CODE {code}: {e}")
-                self.active_jobs[code]["status"] = "Download Failed"
-                return None
-        
-        # --- منطق قبلی برای بقیه پلتفرم‌ها ---
-        output_path = os.path.join(self.download_dir, f"{code} - %(title).30s.%(ext)s")
-        if "soundcloud.com" in url or "spotify" in url: ydl_opts = {'outtmpl': output_path, 'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None, 'format': 'bestaudio/best', 'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3'}]}
-        else: ydl_opts = {'outtmpl': output_path, 'format': 'bestvideo[height<=720]+bestaudio/best[height<=720]/best', 'merge_output_format': 'mp4', 'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None}
-        ydl_opts.update({'ignoreerrors': True, 'quiet': True, 'no_warnings': True})
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([url])
-                for f in os.listdir(self.download_dir):
-                    if f.startswith(code): downloaded_file = os.path.join(self.download_dir, f); self.active_jobs[code]["status"] = "Downloaded"; return downloaded_file
+                # دانلود مستقیم فایل از لینک دریافتی از API
+                file_path = os.path.join(self.download_dir, f"{code}{file_ext}")
+                with requests.get(media_url, stream=True) as r:
+                    r.raise_for_status()
+                    with open(file_path, 'wb') as f:
+                        for chunk in r.iter_content(chunk_size=8192):
+                            f.write(chunk)
+                
+                self.active_jobs[code]["status"] = "Downloaded"
+                return file_path
+            
+            # برای بقیه پلتفرم‌ها از yt-dlp استفاده کن
+            else:
+                output_path = os.path.join(self.download_dir, f"{code} - %(title).30s.%(ext)s")
+                if "soundcloud.com" in url or "spotify.com" in url:
+                    ydl_opts = {'outtmpl': output_path, 'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None, 'format': 'bestaudio/best', 'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3'}]}
+                else: # YouTube
+                    ydl_opts = {'outtmpl': output_path, 'format': 'bestvideo[height<=720]+bestaudio/best[height<=720]/best', 'merge_output_format': 'mp4', 'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None}
+                
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.download([url])
+                    for f in os.listdir(self.download_dir):
+                        if f.startswith(code):
+                            downloaded_file = os.path.join(self.download_dir, f)
+                            self.active_jobs[code]["status"] = "Downloaded"
+                            return downloaded_file
             return None
-        except: self.active_jobs[code]["status"] = "Download Failed"; return None
-    
-    # ... (بقیه توابع کلاس بدون تغییر باقی می‌مانند) ...
+
+        except Exception as e:
+            self.active_jobs[code]["status"] = "Download Failed"
+            logger.error(f"Khata dar download baraye CODE {code}: {e}")
+            return None
+
+    # ... (بقیه توابع کلاس بدون تغییر هستند) ...
     async def upload_progress(self, sent_bytes, total_bytes, code):
-        percentage = int(sent_bytes * 100 / total_bytes);
+        percentage = int(sent_bytes * 100 / total_bytes)
         if percentage % 10 == 0 or percentage == 100:
             if code in self.active_jobs: self.active_jobs[code]["status"] = f"Uploading: {percentage}%"
     async def process_job(self, message):
         if message.id in self.processed_ids: return
         self.processed_ids.add(message.id)
         try:
-            lines = message.text.split('\n'); url = next(l.replace("URL:", "").strip() for l in lines if l.startswith("URL:")); code = next(l.replace("CODE:", "").strip() for l in lines if l.startswith("CODE:")); user_id = int(next(l.replace("USER_ID:", "").strip() for l in lines if l.startswith("USER_ID:")))
+            lines = message.text.split('\n'); url = next(l.replace("URL:", "").strip() for l in lines if l.startswith("URL:"))
+            code = next(l.replace("CODE:", "").strip() for l in lines if l.startswith("CODE:"))
+            user_id = int(next(l.replace("USER_ID:", "").strip() for l in lines if l.startswith("USER_ID:")))
         except: return
         file_path = await asyncio.to_thread(self.download_media, url, code, user_id)
         if file_path and os.path.exists(file_path):
@@ -105,12 +110,9 @@ class TelethonWorker:
                 if metadata: upload_attributes.append(DocumentAttributeVideo(duration=metadata['duration'], w=metadata['width'], h=metadata['height'], supports_streaming=True))
             try:
                 caption = f"✅ Uploaded\nCODE: {code}\nSIZE: {file_size}"
-                await self.app.send_file(
-                    message.chat_id, file_path, caption=caption, reply_to=message.id, attributes=upload_attributes,
-                    progress_callback=lambda s, t: self.upload_progress(s, t, code)
-                )
+                await self.app.send_file(message.chat_id, file_path, caption=caption, reply_to=message.id, attributes=upload_attributes, progress_callback=lambda s, t: self.upload_progress(s, t, code))
                 self.active_jobs[code]["status"] = "Completed"
-            except: self.active_jobs[code]["status"] = "Upload Failed"
+            except Exception as e: self.active_jobs[code]["status"] = "Upload Failed"; logger.error(f"Khata dar upload (CODE: {code}): {e}")
             finally:
                 if os.path.exists(file_path): os.remove(file_path)
     async def display_dashboard(self):
@@ -127,7 +129,7 @@ class TelethonWorker:
     async def run(self):
         await self.app.start(phone=self.phone)
         me = await self.app.get_me()
-        logger.info(f"Worker (Pro Uploader) ba movaffaghiat be onvane {me.first_name} vared shod.")
+        logger.info(f"Worker (API Downloader) ba movaffaghiat be onvane {me.first_name} vared shod.")
         target_chat_id = GROUP_ID; target_topic_id = ORDER_TOPIC_ID
         try: entity = await self.app.get_entity(target_chat_id)
         except Exception as e: logger.critical(f"Nemitavan be Group ID dastresi peyda kard. Khata: {e}"); return
@@ -141,7 +143,10 @@ class TelethonWorker:
                         asyncio.create_task(self.process_job(message))
                 await asyncio.sleep(10)
             except Exception as e: logger.error(f"Yek khata dar halghe asli rokh dad: {e}"); await asyncio.sleep(30)
+
 async def main():
-    worker = TelethonWorker(api_id=TELEGRAM_API_ID, api_hash=TELEGRAM_API_HASH, phone=TELEGRAM_PHONE); await worker.run()
+    worker = TelethonWorker(api_id=TELEGRAM_API_ID, api_hash=TELEGRAM_API_HASH, phone=TELEGRAM_PHONE)
+    await worker.run()
+
 if __name__ == "__main__":
-    print("--- Rah andazi Pro Uploader Worker ---"); asyncio.run(main())
+    print("--- Rah andazi API Downloader Worker ---"); asyncio.run(main())
