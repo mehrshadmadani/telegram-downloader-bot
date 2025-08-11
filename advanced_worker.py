@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 import yt_dlp
 from telethon import TelegramClient
 from telethon.tl.types import DocumentAttributeVideo
+import instaloader
+from instagrapi import Client as InstagrapiClient # این خط برای رفع خطا اضافه شده است
 from config import (TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_PHONE, 
                     GROUP_ID, ORDER_TOPIC_ID, MAJID_API_TOKEN, 
                     INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
@@ -96,17 +98,14 @@ class TelethonWorker:
         self.active_jobs[code]["status"] = "Download Failed"; return ([], None, None)
 
     async def upload_single_file(self, message, file_path, code, user_id, download_method, index, total, original_caption):
-        """تابع آپلود بهینه‌سازی شده با قابلیت تلاش مجدد"""
-        if not os.path.exists(file_path): return
-        
+        if not os.path.exists(file_path): return False
         self.active_jobs[code]["status"] = f"Uploading {index}/{total}"
         file_size = os.path.getsize(file_path); upload_attributes = []
         if file_path.lower().endswith(('.mp4', '.mkv', '.mov')):
             metadata = self.get_video_metadata(file_path)
             if metadata: upload_attributes.append(DocumentAttributeVideo(duration=metadata['duration'], w=metadata['width'], h=metadata['height'], supports_streaming=True))
         
-        # --- منطق تلاش مجدد ---
-        for attempt in range(3): # حداکثر ۳ بار تلاش
+        for attempt in range(3):
             try:
                 caption_str = ""
                 if index == total and original_caption:
@@ -116,18 +115,18 @@ class TelethonWorker:
                 
                 await self.app.send_file(
                     message.chat_id, file_path, caption=caption, reply_to=message.id, attributes=upload_attributes,
-                    part_size_kb=512, # افزایش اندازه قطعات آپلود
+                    part_size_kb=512,
                     progress_callback=lambda s, t: self.upload_progress(s, t, code, index, total)
                 )
                 logger.info(f"Upload successful for {file_path} on attempt {attempt+1}")
-                return # در صورت موفقیت، از حلقه خارج شو
+                return True
             except Exception as e:
                 logger.warning(f"Upload attempt {attempt+1} failed for {file_path}: {e}")
-                if attempt < 2: # اگر آخرین تلاش نبود، کمی صبر کن
+                if attempt < 2:
                     await asyncio.sleep(5)
         
         logger.error(f"Upload permanently failed for {file_path} after 3 attempts.")
-        # --- پایان منطق تلاش مجدد ---
+        return False
 
     async def process_job(self, message):
         if message.id in self.processed_ids: return
@@ -145,11 +144,13 @@ class TelethonWorker:
                 task = self.upload_single_file(message, file_path, code, user_id, download_method, i + 1, total_files, original_caption)
                 upload_tasks.append(task)
             
-            await asyncio.gather(*upload_tasks)
-            self.active_jobs[code]["status"] = "Completed"
+            results = await asyncio.gather(*upload_tasks)
+            if False in results:
+                self.active_jobs[code]["status"] = "Upload Failed"
+            else:
+                self.active_jobs[code]["status"] = "Completed"
 
     async def display_dashboard(self):
-        # ... (بدون تغییر) ...
         while True:
             os.system('clear' if os.name == 'posix' else 'cls'); print("--- 🚀 Advanced Downloader Dashboard 🚀 ---")
             print(f"{'Job Code':<12} | {'User ID':<12} | {'Status':<25}"); print("-" * 55)
@@ -157,13 +158,14 @@ class TelethonWorker:
             else:
                 for code, data in list(self.active_jobs.items()):
                     print(f"{code:<12} | {data.get('user_id', 'N/A'):<12} | {data.get('status', 'N/A'):<25}")
-                    if data.get('status') == "Completed": await asyncio.sleep(5); self.active_jobs.pop(code, None)
+                    if data.get('status') in ["Completed", "Upload Failed"]:
+                        await asyncio.sleep(5); self.active_jobs.pop(code, None)
             print("-" * 55); print(f"Last Update: {datetime.now().strftime('%H:%M:%S')}"); await asyncio.sleep(1)
 
     async def run(self):
         await self.app.start(phone=self.phone)
         me = await self.app.get_me()
-        logger.info(f"Worker (Resilient Upload) ba movaffaghiat be onvane {me.first_name} vared shod.")
+        logger.info(f"Worker (Final Version) ba movaffaghiat be onvane {me.first_name} vared shod.")
         target_chat_id = GROUP_ID; target_topic_id = ORDER_TOPIC_ID
         try: entity = await self.app.get_entity(target_chat_id)
         except Exception as e: logger.critical(f"Nemitavan be Group ID dastresi peyda kard. Khata: {e}"); return
