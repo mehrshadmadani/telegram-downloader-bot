@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # =============================================================
-#         Coka Bot Manager - Universal Smart Installer v12.0 (Final Fix)
+#         Coka Bot Manager - Universal Smart Installer v12.0
 # =============================================================
 
 COKA_SCRIPT_PATH="/usr/local/bin/coka"
@@ -13,11 +13,13 @@ print_error() { echo -e "\e[31mERROR: $1\e[0m"; }
 print_warning() { echo -e "\e[33mWARNING: $1\e[0m"; }
 
 # --- Main Logic ---
+
 if [ "$(id -u)" -ne 0 ]; then
   print_error "This script must be run with sudo or as root."
   exit 1
 fi
 
+# --- Smart Default Value Detection ---
 DEFAULT_BOT_DIR="/root/telegram-downloader-bot"
 DEFAULT_MANAGER_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/install_coka.sh"
 
@@ -27,34 +29,40 @@ if [ -f "$COKA_SCRIPT_PATH" ]; then
     EXISTING_MANAGER_URL=$(grep -oP 'MANAGER_SCRIPT_URL="\K[^"]+' "$COKA_SCRIPT_PATH" || echo "$DEFAULT_MANAGER_URL")
     DEFAULT_BOT_DIR=$EXISTING_BOT_DIR
     DEFAULT_MANAGER_URL=$EXISTING_MANAGER_URL
+
     read -p "Do you want to force overwrite it with the latest version (v12.0)? (y/n): " OVERWRITE_CONFIRM
     if [[ "$OVERWRITE_CONFIRM" != "y" ]]; then
         print_info "Installation cancelled."
         exit 0
     fi
+    print_info "Proceeding with re-installation..."
 fi
 
 # --- Interactive Setup ---
-print_info "Configuring the 'coka' management command..."
+print_info "Welcome! Let's configure the 'coka' management command."
+echo
 read -p "Enter the full path to your bot directory [Default: $DEFAULT_BOT_DIR]: " BOT_DIR_INPUT
 BOT_DIR=${BOT_DIR_INPUT:-$DEFAULT_BOT_DIR}
-read -p "Enter the raw GitHub URL for this installer script [Default: $DEFAULT_MANAGER_URL]: " MANAGER_URL_INPUT
+read -p "Enter the raw GitHub URL for this installer script itself [Default: $DEFAULT_MANAGER_URL]: " MANAGER_URL_INPUT
 MANAGER_URL=${MANAGER_URL_INPUT:-$DEFAULT_MANAGER_URL}
+echo
 
 # --- Installation ---
 print_info "Installing required utilities (screen, curl)..."
 apt-get update > /dev/null 2>&1
 apt-get install -y screen curl > /dev/null 2>&1
-print_info "Creating the 'coka' management script..."
+print_success "Utilities are ready."
+print_info "Creating the 'coka' management script with your settings..."
 
 # --- Writing the coka script content ---
 cat > "$COKA_SCRIPT_PATH" << EOF
 #!/bin/bash
-VERSION="12.0 (Compatibility Fix)"
+VERSION="12.0 (Monitoring Panel)"
 BOT_DIR="$BOT_DIR"
 MANAGER_SCRIPT_URL="$MANAGER_URL"
 WORKER_SCREEN_NAME="worker_session"
 MAIN_BOT_SCREEN_NAME="main_bot_session"
+
 print_info() { echo -e "\e[34mINFO: \$1\e[0m"; }
 print_success() { echo -e "\e[32mSUCCESS: \$1\e[0m"; }
 print_error() { echo -e "\e[31mERROR: \$1\e[0m"; }
@@ -84,17 +92,29 @@ stop_service() {
 update_manager() {
     print_info "Updating 'coka' manager script itself..."
     curl -s -L "\$MANAGER_SCRIPT_URL" | sudo bash
-    if [ \$? -eq 0 ]; then print_success "'coka' manager has been updated successfully!"; else print_error "Failed to run update script."; fi
+    if [ \$? -eq 0 ]; then
+        print_success "'coka' manager has been updated successfully!"
+        print_info "Relaunching..."
+        sleep 2
+        exec coka
+    else
+        print_error "Failed to run update script.";
+    fi
 }
 
 show_panel() {
     clear
-    # A more compatible way to get the primary IP address
-    SERVER_IP=\$(ip -4 addr show | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | grep -v '127.0.0.1' | head -n 1)
+    SERVER_IP=\$(hostname -I | cut -d' ' -f1)
+    CPU_USAGE=\$(top -bn1 | grep "Cpu(s)" | sed "s/.*, *\([0-9.]*\)%* id.*/\1/" | awk '{print 100 - \$1"%%"}')
+    MEM_INFO=\$(free -m | awk 'NR==2{printf "%.2f/%.2f GB (%.0f%%)", \$3/1024, \$2/1024, \$3*100/\$2 }')
+    DISK_INFO=\$(df -h / | awk 'NR==2{printf "%s / %s (%s)", \$3, \$2, \$5}')
+
     echo -e "\e[1;35m
 ╔════════════════════════════════════════════════════╗
 ║             COKA BOT CONTROL PANEL                 ║
 ╚════════════════════════════════════════════════════╝\e[0m"
+    echo -e "  \e[1mCPU:\e[0m \e[1;37m\$CPU_USAGE \e[1m| RAM:\e[0m \e[1;37m\$MEM_INFO \e[1m| Disk:\e[0m \e[1;37m\$DISK_INFO"
+    echo -e "\e[2m----------------------------------------------------------\e[0m"
     echo -e "  \e[1mServer IP:\e[0m \e[33m\$SERVER_IP\e[0m  \e[1mManager:\e[0m \e[36mv\$VERSION\e[0m"
     if is_running "\$WORKER_SCREEN_NAME"; then W_STATUS="\e[1;32mRUNNING\e[0m"; else W_STATUS="\e[1;31mSTOPPED\e[0m"; fi
     if is_running "\$MAIN_BOT_SCREEN_NAME"; then M_STATUS="\e[1;32mRUNNING\e[0m"; else M_STATUS="\e[1;31mSTOPPED\e[0m"; fi
@@ -110,7 +130,7 @@ worker_menu() {
         echo "  [2] Stop Worker"
         echo "  [3] View Live Dashboard"
         echo "  [4] View Log File"
-        echo "  [5] Back to Main Menu"
+        echo "  [0] Back to Main Menu"
         echo -e "\e[2m----------------------------------------------------------\e[0m"
         read -p "  Enter your choice: " choice
         case \$choice in
@@ -118,7 +138,7 @@ worker_menu() {
             2) stop_service "Worker" "\$WORKER_SCREEN_NAME" ;;
             3) print_warning "To detach, press Ctrl+A then D."; sleep 2; screen -r "\$WORKER_SCREEN_NAME" ;;
             4) tail -f bot.log ;;
-            5) return ;;
+            0) return ;;
             *) print_error "Invalid option." ;;
         esac
         echo; read -p "Press [Enter] to continue..."
@@ -132,14 +152,14 @@ main_bot_menu() {
         echo "  [1] Start / Restart Main Bot"
         echo "  [2] Stop Main Bot"
         echo "  [3] View Log File"
-        echo "  [4] Back to Main Menu"
+        echo "  [0] Back to Main Menu"
         echo -e "\e[2m----------------------------------------------------------\e[0m"
         read -p "  Enter your choice: " choice
         case \$choice in
             1) start_service "Main Bot" "\$MAIN_BOT_SCREEN_NAME" "main_bot.py" ;;
             2) stop_service "Main Bot" "\$MAIN_BOT_SCREEN_NAME" ;;
             3) tail -f main_bot.log ;;
-            4) return ;;
+            0) return ;;
             *) print_error "Invalid option." ;;
         esac
         echo; read -p "Press [Enter] to continue..."
@@ -153,14 +173,14 @@ main_menu() {
         echo "  [1] Worker Manager"
         echo "  [2] Main Bot Manager"
         echo "  [3] Update This Manager (coka)"
-        echo "  [q] Quit"
+        echo "  [0] Quit"
         echo -e "\e[2m----------------------------------------------------------\e[0m"
         read -p "  Enter your choice: " choice
         case \$choice in
             1) worker_menu ;;
             2) main_bot_menu ;;
-            3) update_manager; exit 0 ;;
-            q|Q) echo "Exiting."; exit 0 ;;
+            3) update_manager; ;;
+            0) echo "Exiting."; exit 0 ;;
             *) print_error "Invalid option." ;;
         esac
     done
