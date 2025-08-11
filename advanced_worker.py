@@ -172,6 +172,7 @@ class TelethonWorker:
     
     async def process_job(self, message):
         """پیام کار جدید را پردازش، دانلود و آپلود می‌کند."""
+        # --- START OF MODIFIED SECTION ---
         if message.id in self.processed_ids: return
         self.processed_ids.add(message.id)
         
@@ -184,21 +185,26 @@ class TelethonWorker:
             logger.error(f"Could not parse job message: {message.text}"); return
 
         logger.info(f"✅ Processing job [{code}] for user [{user_id}] with URL: {url}")
-        self.active_jobs[code] = {"user_id": user_id, "status": "Starting..."}
+        self.active_jobs[code] = {"user_id": user_id, "status": "Queued"}
+        
+        file_paths, caption, method = [], None, None
         
         if "instagram.com" in url:
+            self.active_jobs[code]["status"] = "Downloading (Instagram)..."
             file_paths, caption, method = await asyncio.to_thread(self.download_from_instagram, url, code)
         else:
+            self.active_jobs[code]["status"] = "Downloading (yt-dlp)..."
             file_paths, caption, method = await asyncio.to_thread(self.download_with_yt_dlp, url, code)
         
         if file_paths:
-            self.active_jobs[code]["status"] = "Downloaded, starting upload..."
+            self.active_jobs[code]["status"] = "Downloaded, preparing upload..."
             for i, file_path in enumerate(file_paths):
                 await self.upload_single_file(message, file_path, code, method, i + 1, len(file_paths), caption if i + 1 == len(file_paths) else "")
             self.active_jobs[code]["status"] = "Completed"
         else:
             self.active_jobs[code]["status"] = "Download Failed"
             logger.error(f"❌ [{code}] All download methods failed. Job ended.")
+        # --- END OF MODIFIED SECTION ---
 
     async def display_dashboard(self):
         """داشبورد وضعیت کارها را در کنسول نمایش می‌دهد."""
