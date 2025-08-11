@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # =============================================================
-#         Coka Bot Manager - Universal Smart Installer v30.0 (Final)
+#         Coka Bot Manager - Universal Smart Installer v31.0 (Full Final)
 # =============================================================
 
 COKA_SCRIPT_PATH="/usr/local/bin/coka"
@@ -24,8 +24,14 @@ DEFAULT_MANAGER_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-d
 
 if [ -f "$COKA_SCRIPT_PATH" ]; then
     print_warning "'coka' command is already installed."
+    print_info "Fetching latest version info from GitHub..."
     LATEST_VERSION=$(curl -sL "$VERSION_URL" | head -n 1)
     if [ -z "$LATEST_VERSION" ]; then LATEST_VERSION="N/A"; fi
+    
+    EXISTING_BOT_DIR=$(grep -oP 'BOT_DIR="\K[^"]+' "$COKA_SCRIPT_PATH" || echo "$DEFAULT_BOT_DIR")
+    EXISTING_MANAGER_URL=$(grep -oP 'MANAGER_SCRIPT_URL="\K[^"]+' "$COKA_SCRIPT_PATH" || echo "$DEFAULT_MANAGER_URL")
+    DEFAULT_BOT_DIR=$EXISTING_BOT_DIR
+    DEFAULT_MANAGER_URL=$EXISTING_MANAGER_URL
     
     read -p "Do you want to force overwrite it with the latest version from GitHub (v$LATEST_VERSION)? (y/n): " OVERWRITE_CONFIRM
     if [[ "$OVERWRITE_CONFIRM" != "y" ]]; then
@@ -34,8 +40,15 @@ if [ -f "$COKA_SCRIPT_PATH" ]; then
     fi
 else
     LATEST_VERSION=$(curl -sL "$VERSION_URL" | head -n 1)
-    if [ -z "$LATEST_VERSION" ]; then LATEST_VERSION="30.0 (Final)"; fi
+    if [ -z "$LATEST_VERSION" ]; then LATEST_VERSION="31.0 (Final)"; fi
 fi
+
+# --- Interactive Setup ---
+print_info "Configuring the 'coka' management command..."
+read -p "Enter the full path to your bot directory [Default: $DEFAULT_BOT_DIR]: " BOT_DIR_INPUT
+BOT_DIR=${BOT_DIR_INPUT:-$DEFAULT_BOT_DIR}
+read -p "Enter the raw GitHub URL for this installer script itself [Default: $DEFAULT_MANAGER_URL]: " MANAGER_URL_INPUT
+MANAGER_URL=${MANAGER_URL_INPUT:-$DEFAULT_MANAGER_URL}
 
 # --- Installation ---
 print_info "Installing required utilities (screen, curl, bc)..."
@@ -47,16 +60,15 @@ print_info "Creating the 'coka' management script..."
 cat > "$COKA_SCRIPT_PATH" << EOF
 #!/bin/bash
 VERSION="$LATEST_VERSION"
-BOT_DIR="/root/telegram-downloader-bot"
-WORKER_SCREEN_NAME="worker_session"
-MAIN_BOT_SCREEN_NAME="main_bot_session"
-
-# --- Link-haye Sabet baraye Update ---
-MANAGER_SCRIPT_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/install_coka.sh"
+BOT_DIR="$BOT_DIR"
+MANAGER_SCRIPT_URL="$MANAGER_URL"
+CONFIG_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/config.py.example"
+REQS_SCRIPT_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/requirements.txt"
 WORKER_SCRIPT_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/advanced_worker.py"
 MAIN_BOT_SCRIPT_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/main_bot.py"
-REQS_SCRIPT_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/requirements.txt"
 VERSION_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/version.txt"
+WORKER_SCREEN_NAME="worker_session"
+MAIN_BOT_SCREEN_NAME="main_bot_session"
 
 # --- Functions ---
 print_info() { echo -e "\e[34mINFO: \$1\e[0m"; }
@@ -90,12 +102,14 @@ update_script() {
     local service_name=\$1
     local script_url=\$2
     local file_path=\$3
+    
     print_warning "This will overwrite '\$file_path' with the latest version from GitHub."
     read -p "Are you sure? (y/n): " confirm
     if [[ "\$confirm" != "y" ]]; then
         print_info "Update for \$service_name cancelled."
         return
     fi
+    
     print_info "Updating \$service_name script..."
     curl -s -L "\$script_url" -o "\$file_path"
     if [ \$? -eq 0 ]; then
@@ -115,16 +129,19 @@ update_manager() {
         print_error "Could not fetch latest version info."
         return
     fi
+    
     if [ "\$VERSION" == "\$LATEST_VERSION" ]; then
         print_success "You are already on the latest version (v\$VERSION)."
         return
     fi
+
     print_warning "A new version is available: v\$LATEST_VERSION"
     read -p "Do you want to update from v\$VERSION to v\$LATEST_VERSION? (y/n): " UPDATE_CONFIRM
     if [[ "\$UPDATE_CONFIRM" != "y" ]]; then
         print_info "Update cancelled."
         return
     fi
+
     print_info "Updating 'coka' manager script itself..."
     curl -s -L "\$MANAGER_SCRIPT_URL" | sudo bash
     if [ \$? -eq 0 ]; then
@@ -168,6 +185,41 @@ clear_and_prepare_cookies() {
     echo "# Netscape HTTP Cookie File" > "\$BOT_DIR/cookies.txt"
     echo "# Paste your new cookies below this line." >> "\$BOT_DIR/cookies.txt"
     print_success "cookies.txt is now clean and ready."
+}
+
+smart_update_config() {
+    print_info "Starting smart update for config.py..."
+    TEMP_CONFIG="/tmp/config.py.latest"
+    
+    print_info "Downloading latest config template from GitHub..."
+    curl -s -L "\$CONFIG_URL" -o "\$TEMP_CONFIG"
+    if [ \$? -ne 0 ] || [ ! -s "\$TEMP_CONFIG" ]; then
+        print_error "Failed to download config template."
+        rm -f "\$TEMP_CONFIG"
+        return
+    fi
+    
+    ADDED_COUNT=0
+    while IFS= read -r line || [[ -n "\$line" ]]; do
+        if [[ \$line =~ ^#.* ]] || [[ -z \$line ]]; then
+            continue
+        fi
+        var_name=\$(echo "\$line" | cut -d '=' -f 1 | tr -d '[:space:]')
+        if ! grep -q "^\s*\$var_name\s*=" "\$BOT_DIR/config.py"; then
+            print_info "New variable found: '\$var_name'. Adding it to your config.py..."
+            echo "" >> "\$BOT_DIR/config.py"
+            echo "\$line" >> "\$BOT_DIR/config.py"
+            ADDED_COUNT=\$((ADDED_COUNT + 1))
+        fi
+    done < "\$TEMP_CONFIG"
+
+    if [ \$ADDED_COUNT -gt 0 ]; then
+        print_success "\$ADDED_COUNT new variable(s) added to config.py."
+        print_warning "Please edit the file manually to set their values: 'coka config edit'"
+    else
+        print_success "Your config.py is already up to date. No new variables found."
+    fi
+    rm -f "\$TEMP_CONFIG"
 }
 
 # --- UI Functions ---
@@ -283,6 +335,27 @@ cookies_menu() {
     done
 }
 
+config_menu() {
+    while true; do
+        show_panel_and_menu
+        echo "  Config Manager Menu:"
+        echo "  [1] View Config File"
+        echo "  [2] Manual Edit (nano)"
+        echo "  [3] Smart Update from GitHub"
+        echo "  [0] Back to Main Menu"
+        echo -e "\e[2m----------------------------------------------------------\e[0m"
+        read -p "  Enter your choice: " choice
+        case \$choice in
+            1) print_info "Content of config.py:"; echo "---------------------------------"; cat -n "\$BOT_DIR/config.py"; echo "---------------------------------";;
+            2) nano "\$BOT_DIR/config.py" ;;
+            3) smart_update_config ;;
+            0) return ;;
+            *) print_error "Invalid option." ;;
+        esac
+        echo; read -p "Press [Enter] to continue..."
+    done
+}
+
 main_menu() {
     while true; do
         show_panel_and_menu
@@ -291,7 +364,8 @@ main_menu() {
         echo "  [2] Main Bot Manager"
         echo "  [3] Requirements Manager"
         echo "  [4] Cookie Manager"
-        echo "  [5] Update This Manager (coka)"
+        echo "  [5] Config Manager"
+        echo "  [6] Update This Manager (coka)"
         echo "  [0] Quit"
         echo -e "\e[2m-------------------------------------------------------------------------------\e[0m"
         read -p "  Enter your choice: " choice
@@ -300,7 +374,8 @@ main_menu() {
             2) main_bot_menu ;;
             3) requirements_menu ;;
             4) cookies_menu ;;
-            5) update_manager; ;;
+            5) config_menu ;;
+            6) update_manager; ;;
             0) echo "Exiting."; clear; exit 0 ;;
             *) print_error "Invalid option." ;;
         esac
