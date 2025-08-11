@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # =============================================================
-#         Coka Bot Manager - Universal Smart Installer v23.0 (Smart Update Prompt)
+#         Coka Bot Manager - Universal Installer v25.0 (Hardcoded URLs)
 # =============================================================
 
 COKA_SCRIPT_PATH="/usr/local/bin/coka"
@@ -19,19 +19,10 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
-DEFAULT_BOT_DIR="/root/telegram-downloader-bot"
-DEFAULT_MANAGER_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/install_coka.sh"
-
 if [ -f "$COKA_SCRIPT_PATH" ]; then
     print_warning "'coka' command is already installed."
-    print_info "Fetching latest version info from GitHub..."
     LATEST_VERSION=$(curl -sL "$VERSION_URL" | head -n 1)
     if [ -z "$LATEST_VERSION" ]; then LATEST_VERSION="N/A"; fi
-    
-    EXISTING_BOT_DIR=$(grep -oP 'BOT_DIR="\K[^"]+' "$COKA_SCRIPT_PATH" || echo "$DEFAULT_BOT_DIR")
-    EXISTING_MANAGER_URL=$(grep -oP 'MANAGER_SCRIPT_URL="\K[^"]+' "$COKA_SCRIPT_PATH" || echo "$DEFAULT_MANAGER_URL")
-    DEFAULT_BOT_DIR=$EXISTING_BOT_DIR
-    DEFAULT_MANAGER_URL=$EXISTING_MANAGER_URL
     
     read -p "Do you want to force overwrite it with the latest version from GitHub (v$LATEST_VERSION)? (y/n): " OVERWRITE_CONFIRM
     if [[ "$OVERWRITE_CONFIRM" != "y" ]]; then
@@ -40,15 +31,8 @@ if [ -f "$COKA_SCRIPT_PATH" ]; then
     fi
 else
     LATEST_VERSION=$(curl -sL "$VERSION_URL" | head -n 1)
-    if [ -z "$LATEST_VERSION" ]; then LATEST_VERSION="23.0 (Smart Update)"; fi
+    if [ -z "$LATEST_VERSION" ]; then LATEST_VERSION="25.0 (Hardcoded)"; fi
 fi
-
-# --- Interactive Setup ---
-print_info "Configuring the 'coka' management command..."
-read -p "Enter the full path to your bot directory [Default: $DEFAULT_BOT_DIR]: " BOT_DIR_INPUT
-BOT_DIR=${BOT_DIR_INPUT:-$DEFAULT_BOT_DIR}
-read -p "Enter the raw GitHub URL for this installer script itself [Default: $DEFAULT_MANAGER_URL]: " MANAGER_URL_INPUT
-MANAGER_URL=${MANAGER_URL_INPUT:-$DEFAULT_MANAGER_URL}
 
 # --- Installation ---
 print_info "Installing required utilities (screen, curl, bc)..."
@@ -60,18 +44,26 @@ print_info "Creating the 'coka' management script..."
 cat > "$COKA_SCRIPT_PATH" << EOF
 #!/bin/bash
 VERSION="$LATEST_VERSION"
-BOT_DIR="$BOT_DIR"
-MANAGER_SCRIPT_URL="$MANAGER_URL"
-VERSION_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/version.txt"
+
+# --- Tanzimat (Settings) ---
+BOT_DIR="/root/telegram-downloader-bot"
 WORKER_SCREEN_NAME="worker_session"
 MAIN_BOT_SCREEN_NAME="main_bot_session"
 
+# --- Link-haye Sabet baraye Update (Hardcoded URLs) ---
+MANAGER_SCRIPT_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/install_coka.sh"
+WORKER_SCRIPT_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/advanced_worker.py"
+MAIN_BOT_SCRIPT_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/main_bot.py"
+
+
+# --- Functions ---
 print_info() { echo -e "\e[34mINFO: \$1\e[0m"; }
 print_success() { echo -e "\e[32mSUCCESS: \$1\e[0m"; }
 print_error() { echo -e "\e[31mERROR: \$1\e[0m"; }
 print_warning() { echo -e "\e[33mWARNING: \$1\e[0m"; }
 is_running() { screen -list | grep -q "\$1"; }
 
+# --- Core Logic Functions ---
 start_service() {
     local service_name=\$1; local screen_name=\$2; local script_name=\$3
     print_info "Ensuring \$service_name is started..."
@@ -92,15 +84,30 @@ stop_service() {
     print_success "Stop command sent to \$service_name."
 }
 
-update_manager() {
-    print_info "Fetching latest version info from GitHub..."
-    LATEST_VERSION=\$(curl -sL "\$VERSION_URL" | head -n 1)
-    if [ -z "\$LATEST_VERSION" ]; then
-        print_error "Could not fetch latest version info."
+update_script() {
+    local service_name=\$1
+    local script_url=\$2
+    local file_path=\$3
+    
+    print_warning "This will overwrite '\$file_path' with the latest version from GitHub."
+    read -p "Are you sure? (y/n): " confirm
+    if [[ "\$confirm" != "y" ]]; then
+        print_info "Update for \$service_name cancelled."
         return
     fi
+    
+    print_info "Updating \$service_name script..."
+    curl -s -L "\$script_url" -o "\$file_path"
+    if [ \$? -eq 0 ]; then
+        print_success "\$service_name script updated successfully."
+        print_warning "Restart the service to apply changes: 'coka restart \$service_name'"
+    else
+        print_error "Failed to download update for \$service_name."
+    fi
+}
 
-    print_warning "This will update the 'coka' script to v\$LATEST_VERSION."
+update_manager() {
+    print_warning "This will update the 'coka' script to the latest version from GitHub."
     read -p "Are you sure you want to continue? (y/n): " UPDATE_CONFIRM
     if [[ "\$UPDATE_CONFIRM" != "y" ]]; then
         print_info "Update cancelled."
@@ -118,6 +125,7 @@ update_manager() {
     fi
 }
 
+# --- UI Functions ---
 show_panel_and_menu() {
     clear
     SERVER_IP=\$(hostname -I | cut -d' ' -f1)
@@ -142,18 +150,20 @@ worker_menu() {
     while true; do
         show_panel_and_menu
         echo "  Worker Manager Menu:"
-        echo "  [1] Start / Restart Worker"
-        echo "  [2] Stop Worker"
+        echo "  [1] Start / Restart"
+        echo "  [2] Stop"
         echo "  [3] View Live Dashboard"
         echo "  [4] View Log File"
+        echo "  [5] Update from GitHub"
         echo "  [0] Back to Main Menu"
         echo -e "\e[2m-------------------------------------------------------------------------------\e[0m"
-        read -p "  Enter your choice and press Enter: " choice
+        read -p "  Enter your choice: " choice
         case \$choice in
-            1) start_service "Worker" "\$WORKER_SCREEN_NAME" "advanced_worker.py";;
-            2) stop_service "Worker" "\$WORKER_SCREEN_NAME" ;;
-            3) print_warning "To detach, press Ctrl+A then D."; sleep 2; screen -r "\$WORKER_SCREEN_NAME" ;;
+            1) start_service "worker" "\$WORKER_SCREEN_NAME" "advanced_worker.py";;
+            2) stop_service "worker" "\$WORKER_SCREEN_NAME" ;;
+            3) screen -r "\$WORKER_SCREEN_NAME" ;;
             4) tail -f bot.log ;;
+            5) update_script "worker" "\$WORKER_SCRIPT_URL" "\$BOT_DIR/advanced_worker.py" ;;
             0) return ;;
             *) print_error "Invalid option." ;;
         esac
@@ -165,16 +175,18 @@ main_bot_menu() {
      while true; do
         show_panel_and_menu
         echo "  Main Bot Manager Menu:"
-        echo "  [1] Start / Restart Main Bot"
-        echo "  [2] Stop Main Bot"
+        echo "  [1] Start / Restart"
+        echo "  [2] Stop"
         echo "  [3] View Log File"
+        echo "  [4] Update from GitHub"
         echo "  [0] Back to Main Menu"
         echo -e "\e[2m-------------------------------------------------------------------------------\e[0m"
-        read -p "  Enter your choice and press Enter: " choice
+        read -p "  Enter your choice: " choice
         case \$choice in
-            1) start_service "Main Bot" "\$MAIN_BOT_SCREEN_NAME" "main_bot.py" ;;
-            2) stop_service "Main Bot" "\$MAIN_BOT_SCREEN_NAME" ;;
+            1) start_service "main" "\$MAIN_BOT_SCREEN_NAME" "main_bot.py" ;;
+            2) stop_service "main" "\$MAIN_BOT_SCREEN_NAME" ;;
             3) tail -f main_bot.log ;;
+            4) update_script "main" "\$MAIN_BOT_SCRIPT_URL" "\$BOT_DIR/main_bot.py" ;;
             0) return ;;
             *) print_error "Invalid option." ;;
         esac
@@ -191,7 +203,7 @@ main_menu() {
         echo "  [3] Update This Manager (coka)"
         echo "  [0] Quit"
         echo -e "\e[2m-------------------------------------------------------------------------------\e[0m"
-        read -p "  Enter your choice and press Enter: " choice
+        read -p "  Enter your choice: " choice
         case \$choice in
             1) worker_menu ;;
             2) main_bot_menu ;;
@@ -206,7 +218,7 @@ cd "\$BOT_DIR" || { print_error "Directory not found: \$BOT_DIR"; exit 1; }
 main_menu
 EOF
 
-# --- Final Step ---
+# --- Final Step: Make it executable ---
 chmod +x "$COKA_SCRIPT_PATH"
 print_success "Management script 'coka' (v$LATEST_VERSION) installed successfully!"
 echo
