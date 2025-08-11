@@ -49,18 +49,13 @@ class TelethonWorker:
                 media_url = None
                 if data.get("status") == 200:
                     result = data.get("result", {})
-                    # --- اصلاح کلیدی: استفاده از "image" به جای "pic" ---
-                    if result.get("video"):
-                        media_url = result["video"]
-                    elif result.get("image"):
-                        media_url = result["image"]
-                    elif isinstance(result, list) and result and result[0].get("media"):
-                         media_url = result[0]["media"]
+                    if result.get("video"): media_url = result["video"]
+                    elif result.get("image"): media_url = result["image"]
+                    elif isinstance(result, list) and result and result[0].get("media"): media_url = result[0]["media"]
 
                 if media_url:
                     file_extension = ".jpg" if ".jpg" in media_url.split('?')[0] else ".mp4"
                     output_path = os.path.join(self.download_dir, f"{code}{file_extension}")
-                    
                     media_response = requests.get(media_url, stream=True)
                     media_response.raise_for_status()
                     with open(output_path, 'wb') as f:
@@ -68,7 +63,10 @@ class TelethonWorker:
                     self.active_jobs[code]["status"] = "Downloaded"
                     return output_path
                 else:
-                    raise Exception(f"API Error: Media URL not found in response")
+                    # --- تغییر کلیدی: چاپ کردن پاسخ کامل API در لاگ ---
+                    logger.error("API response did not contain a valid media URL. Full response:")
+                    logger.error(json.dumps(data, indent=2, ensure_ascii=False))
+                    raise Exception(f"Media URL not found in API response")
 
             except Exception as e:
                 logger.error(f"Khata dar download Instagram (API) baraye CODE {code}: {e}")
@@ -87,7 +85,7 @@ class TelethonWorker:
                     if f.startswith(code): downloaded_file = os.path.join(self.download_dir, f); self.active_jobs[code]["status"] = "Downloaded"; return downloaded_file
             return None
         except: self.active_jobs[code]["status"] = "Download Failed"; return None
-
+    
     # ... (بقیه توابع کلاس بدون تغییر باقی می‌مانند) ...
     async def upload_progress(self, sent_bytes, total_bytes, code):
         percentage = int(sent_bytes * 100 / total_bytes);
