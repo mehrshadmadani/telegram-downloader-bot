@@ -1,3 +1,4 @@
+import os  # <--- این خط اضافه شد
 import psycopg2
 import random
 import string
@@ -55,6 +56,7 @@ class PostgresDB:
                 cur.execute("INSERT INTO jobs (code, user_id, url) VALUES (%s, %s, %s);", (code, user_id, url))
 
     def get_job_by_code(self, code):
+        """اطلاعات کامل یک کار را با استفاده از کد آن برمی‌گرداند."""
         with self.get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT user_id, url FROM jobs WHERE code = %s;", (code,))
@@ -122,10 +124,12 @@ class AdvancedBot:
         self.instagrapi_client = self.setup_instagrapi_client()
 
     def setup_instagrapi_client(self):
+        """کلاینت اینستاگرام را برای ربات اصلی راه‌اندازی می‌کند."""
         try:
             client = InstagrapiClient()
             session_file = f"main_bot_instagrapi_session.json"
-            if os.path.exists(session_file): client.load_settings(session_file)
+            if os.path.exists(session_file):
+                client.load_settings(session_file)
             client.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
             client.dump_settings(session_file)
             logger.info("✅ Main Bot Instagrapi session loaded/created.")
@@ -171,6 +175,8 @@ class AdvancedBot:
     async def handle_group_files(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not update.message or not update.message.caption or update.message.message_thread_id != self.order_topic_id:
             return
+        
+        info = {}
         try:
             caption_lines = update.message.caption.split('\n')
             info = {line.split(":", 1)[0].strip(): line.split(":", 1)[1].strip() for line in caption_lines if ":" in line}
@@ -188,7 +194,7 @@ class AdvancedBot:
             async def send_media_to_user(media_type, file_id, caption_text):
                 actions = {'video': context.bot.send_video, 'audio': context.bot.send_audio, 'photo': context.bot.send_photo, 'document': context.bot.send_document}
                 kwargs = {'chat_id': user_id, media_type: file_id, 'caption': caption_text, 'parse_mode': 'Markdown'}
-                await actions[media_type](**kwargs)
+                if media_type: await actions[media_type](**kwargs)
             
             media_type = next((mt for mt in ['video', 'audio', 'photo', 'document'] if getattr(update.message, mt)), None)
             file_id = getattr(update.message, media_type).file_id if media_type != 'photo' else getattr(update.message, media_type)[-1].file_id
