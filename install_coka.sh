@@ -1,28 +1,73 @@
 #!/bin/bash
+
 # =============================================================
-#         Coka Bot - Universal Management Script
+#         Coka Bot Manager - Universal Smart Installer v22.0 (Final Fix)
 # =============================================================
 
-# --- Tanzimat (Settings) ---
-VERSION="21.0 (Final Stable)"
-# !!! MOHEM !!! Lotfan in 2 masir ra check konid.
-# 1. Masir-e kamel-e poosheh-ye robot
-BOT_DIR="/root/telegram-downloader-bot"
-# 2. Link-e mostaghim be file-e install.sh dar GitHub (Raw Link)
-MANAGER_SCRIPT_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/install_coka.sh"
+COKA_SCRIPT_PATH="/usr/local/bin/coka"
+VERSION_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/version.txt"
 
-# Nam-e session-haye screen
+# --- Functions ---
+print_info() { echo -e "\e[34mINFO: $1\e[0m"; }
+print_success() { echo -e "\e[32mSUCCESS: $1\e[0m"; }
+print_error() { echo -e "\e[31mERROR: $1\e[0m"; }
+print_warning() { echo -e "\e[33mWARNING: $1\e[0m"; }
+
+# --- Main Logic ---
+if [ "$(id -u)" -ne 0 ]; then
+  print_error "This script must be run with sudo or as root."
+  exit 1
+fi
+
+DEFAULT_BOT_DIR="/root/telegram-downloader-bot"
+DEFAULT_MANAGER_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/install_coka.sh"
+
+if [ -f "$COKA_SCRIPT_PATH" ]; then
+    print_warning "'coka' command is already installed."
+    LATEST_VERSION=$(curl -sL "$VERSION_URL" | head -n 1)
+    if [ -z "$LATEST_VERSION" ]; then LATEST_VERSION="N/A"; fi
+    EXISTING_BOT_DIR=$(grep -oP 'BOT_DIR="\K[^"]+' "$COKA_SCRIPT_PATH" || echo "$DEFAULT_BOT_DIR")
+    EXISTING_MANAGER_URL=$(grep -oP 'MANAGER_SCRIPT_URL="\K[^"]+' "$COKA_SCRIPT_PATH" || echo "$DEFAULT_MANAGER_URL")
+    DEFAULT_BOT_DIR=$EXISTING_BOT_DIR
+    DEFAULT_MANAGER_URL=$EXISTING_MANAGER_URL
+    read -p "Do you want to force overwrite it with the latest version from GitHub (v$LATEST_VERSION)? (y/n): " OVERWRITE_CONFIRM
+    if [[ "$OVERWRITE_CONFIRM" != "y" ]]; then
+        print_info "Installation cancelled."
+        exit 0
+    fi
+else
+    LATEST_VERSION=$(curl -sL "$VERSION_URL" | head -n 1)
+    if [ -z "$LATEST_VERSION" ]; then LATEST_VERSION="22.0 (Final Fix)"; fi
+fi
+
+# --- Interactive Setup ---
+print_info "Configuring the 'coka' management command..."
+read -p "Enter the full path to your bot directory [Default: $DEFAULT_BOT_DIR]: " BOT_DIR_INPUT
+BOT_DIR=${BOT_DIR_INPUT:-$DEFAULT_BOT_DIR}
+read -p "Enter the raw GitHub URL for this installer script itself [Default: $DEFAULT_MANAGER_URL]: " MANAGER_URL_INPUT
+MANAGER_URL=${MANAGER_URL_INPUT:-$DEFAULT_MANAGER_URL}
+
+# --- Installation ---
+print_info "Installing required utilities (screen, curl, bc)..."
+apt-get update > /dev/null 2>&1
+apt-get install -y screen curl bc > /dev/null 2>&1
+print_info "Creating the 'coka' management script..."
+
+# --- Writing the coka script content ---
+cat > "$COKA_SCRIPT_PATH" << EOF
+#!/bin/bash
+VERSION="$LATEST_VERSION"
+BOT_DIR="$BOT_DIR"
+MANAGER_SCRIPT_URL="$MANAGER_URL"
 WORKER_SCREEN_NAME="worker_session"
 MAIN_BOT_SCREEN_NAME="main_bot_session"
 
-# --- Functions ---
 print_info() { echo -e "\e[34mINFO: \$1\e[0m"; }
 print_success() { echo -e "\e[32mSUCCESS: \$1\e[0m"; }
 print_error() { echo -e "\e[31mERROR: \$1\e[0m"; }
 print_warning() { echo -e "\e[33mWARNING: \$1\e[0m"; }
 is_running() { screen -list | grep -q "\$1"; }
 
-# --- Core Logic Functions ---
 start_service() {
     local service_name=\$1; local screen_name=\$2; local script_name=\$3
     print_info "Ensuring \$service_name is started..."
@@ -51,7 +96,6 @@ update_manager() {
         return
     fi
     print_info "Updating 'coka' manager script itself..."
-    # Downloads and runs the installer, which intelligently handles the update
     curl -s -L "\$MANAGER_SCRIPT_URL" | sudo bash
     if [ \$? -eq 0 ]; then
         print_success "'coka' manager has been updated successfully!"
@@ -63,7 +107,6 @@ update_manager() {
     fi
 }
 
-# --- UI Functions ---
 show_panel_and_menu() {
     clear
     SERVER_IP=\$(hostname -I | cut -d' ' -f1)
@@ -73,10 +116,10 @@ show_panel_and_menu() {
     if is_running "\$WORKER_SCREEN_NAME"; then W_STATUS="\e[1;32mRUNNING\e[0m"; else W_STATUS="\e[1;31mSTOPPED\e[0m"; fi
     if is_running "\$MAIN_BOT_SCREEN_NAME"; then M_STATUS="\e[1;32mRUNNING\e[0m"; else M_STATUS="\e[1;31mSTOPPED\e[0m"; fi
 
-    echo -e "\e[1;35m
-╔═════════════════════════════════════════════════════════════════════════════╗
-║                          COKA BOT CONTROL PANEL                             ║
-╚═════════════════════════════════════════════════════════════════════════════╝\e[0m"
+    echo
+    echo -e "\e[1;35m╔═════════════════════════════════════════════════════════════════════════════╗"
+    echo -e "\e[1;35m║                          COKA BOT CONTROL PANEL                             ║"
+    echo -e "\e[1;35m╚═════════════════════════════════════════════════════════════════════════════╝\e[0m"
     echo -e "  \e[1mCPU:\e[0m \e[1;37m\$CPU_USAGE \e[1m| RAM:\e[0m \e[1;37m\$MEM_INFO \e[1m| Disk:\e[0m \e[1;37m\$DISK_INFO"
     echo -e "\e[2m-------------------------------------------------------------------------------\e[0m"
     echo -e "  \e[1mServer IP:\e[0m \e[33m\$SERVER_IP\e[0m  \e[1mManager:\e[0m \e[36mv\$VERSION\e[0m"
@@ -148,21 +191,12 @@ main_menu() {
     done
 }
 
-# --- Main Script ---
 cd "\$BOT_DIR" || { print_error "Directory not found: \$BOT_DIR"; exit 1; }
-
-# If arguments are provided, run in command mode
-if [ -n "\$1" ]; then
-    case "\$1" in
-        start) start_service "\$2" "\${2}_session" "\${2}.py" ;;
-        stop) stop_service "\$2" "\${2}_session" ;;
-        restart) stop_service "\$2" "\${2}_session"; sleep 2; start_service "\$2" "\${2}_session" "\${2}.py" ;;
-        status) show_panel_and_menu ;;
-        update) update_manager ;;
-        *) print_error "Unknown command: \$1";;
-    esac
-    exit 0
-fi
-
-# If no arguments, run in interactive menu mode
 main_menu
+EOF
+
+# --- Final Step ---
+chmod +x "$COKA_SCRIPT_PATH"
+print_success "Management script 'coka' (v$LATEST_VERSION) installed successfully!"
+echo
+coka
