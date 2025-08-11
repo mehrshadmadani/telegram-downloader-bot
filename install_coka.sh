@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # =============================================================
-#         Coka Bot Manager - Universal Smart Installer v17.0 (Stable UI)
+#         Coka Bot Manager - Universal Smart Installer v18.0 (Final UX)
 # =============================================================
 
 COKA_SCRIPT_PATH="/usr/local/bin/coka"
@@ -27,7 +27,7 @@ if [ -f "$COKA_SCRIPT_PATH" ]; then
     EXISTING_MANAGER_URL=$(grep -oP 'MANAGER_SCRIPT_URL="\K[^"]+' "$COKA_SCRIPT_PATH" || echo "$DEFAULT_MANAGER_URL")
     DEFAULT_BOT_DIR=$EXISTING_BOT_DIR
     DEFAULT_MANAGER_URL=$EXISTING_MANAGER_URL
-    read -p "Do you want to force overwrite it with the latest version (v17.0)? (y/n): " OVERWRITE_CONFIRM
+    read -p "Do you want to force overwrite it with the latest version (v18.0)? (y/n): " OVERWRITE_CONFIRM
     if [[ "$OVERWRITE_CONFIRM" != "y" ]]; then
         print_info "Installation cancelled."
         exit 0
@@ -50,7 +50,7 @@ print_info "Creating the 'coka' management script..."
 # --- Writing the coka script content ---
 cat > "$COKA_SCRIPT_PATH" << EOF
 #!/bin/bash
-VERSION="17.0 (Stable UI)"
+VERSION="18.0 (Final UX)"
 BOT_DIR="$BOT_DIR"
 MANAGER_SCRIPT_URL="$MANAGER_URL"
 WORKER_SCREEN_NAME="worker_session"
@@ -83,6 +83,12 @@ stop_service() {
 }
 
 update_manager() {
+    print_warning "This will update the 'coka' script to the latest version from GitHub."
+    read -p "Are you sure you want to continue? (y/n): " UPDATE_CONFIRM
+    if [[ "\$UPDATE_CONFIRM" != "y" ]]; then
+        print_info "Update cancelled."
+        return
+    fi
     print_info "Updating 'coka' manager script itself..."
     curl -s -L "\$MANAGER_SCRIPT_URL" | sudo bash
     if [ \$? -eq 0 ]; then
@@ -102,27 +108,17 @@ show_panel() {
     MEM_INFO=\$(free -m | awk 'NR==2{printf "%.2f/%.2f GB (%.0f%%)", \$3/1024, \$2/1024, \$3*100/\$2 }')
     DISK_INFO=\$(df -h / | awk 'NR==2{printf "%s / %s (%s)", \$3, \$2, \$5}')
     INTERFACE=\$(ip -o -4 route show to default | awk '{print \$5}' | head -1)
-    if [ -z "\$INTERFACE" ]; then
-        RX_FORMATTED="N/A"
-        TX_FORMATTED="N/A"
-    else
-        RX_BYTES_1=\$(cat /sys/class/net/\$INTERFACE/statistics/rx_bytes)
-        TX_BYTES_1=\$(cat /sys/class/net/\$INTERFACE/statistics/tx_bytes)
+    if [ -z "\$INTERFACE" ]; then RX_FORMATTED="N/A"; TX_FORMATTED="N/A"; else
+        RX_BYTES_1=\$(cat /sys/class/net/\$INTERFACE/statistics/rx_bytes); TX_BYTES_1=\$(cat /sys/class/net/\$INTERFACE/statistics/tx_bytes)
         sleep 1
-        RX_BYTES_2=\$(cat /sys/class/net/\$INTERFACE/statistics/rx_bytes)
-        TX_BYTES_2=\$(cat /sys/class/net/\$INTERFACE/statistics/tx_bytes)
-        RX_SPEED=\$((RX_BYTES_2 - RX_BYTES_1))
-        TX_SPEED=\$((TX_BYTES_2 - TX_BYTES_1))
+        RX_BYTES_2=\$(cat /sys/class/net/\$INTERFACE/statistics/rx_bytes); TX_BYTES_2=\$(cat /sys/class/net/\$INTERFACE/statistics/tx_bytes)
+        RX_SPEED=\$((RX_BYTES_2 - RX_BYTES_1)); TX_SPEED=\$((TX_BYTES_2 - TX_BYTES_1))
         RX_FORMATTED=\$(awk -v speed=\$RX_SPEED 'BEGIN { if (speed > 1024*1024) printf "%.2f MB/s", speed/(1024*1024); else if (speed > 1024) printf "%.2f KB/s", speed/1024; else printf "%d B/s", speed }')
         TX_FORMATTED=\$(awk -v speed=\$TX_SPEED 'BEGIN { if (speed > 1024*1024) printf "%.2f MB/s", speed/(1024*1024); else if (speed > 1024) printf "%.2f KB/s", speed/1024; else printf "%d B/s", speed }')
     fi
     if is_running "\$WORKER_SCREEN_NAME"; then W_STATUS="\e[1;32mRUNNING\e[0m"; else W_STATUS="\e[1;31mSTOPPED\e[0m"; fi
     if is_running "\$MAIN_BOT_SCREEN_NAME"; then M_STATUS="\e[1;32mRUNNING\e[0m"; else M_STATUS="\e[1;31mSTOPPED\e[0m"; fi
-
-    # Step 2: Move cursor to top-left instead of clearing
     echo -ne "\033[H\033[2J"
-
-    # Step 3: Print all pre-gathered data instantly
     echo -e "\e[1;35m
 ╔═════════════════════════════════════════════════════════════════════════════╗
 ║                          COKA BOT CONTROL PANEL                             ║
@@ -145,7 +141,7 @@ worker_menu() {
         echo "  [4] View Log File"
         echo "  [0] Back to Main Menu"
         echo -e "\e[2m-------------------------------------------------------------------------------\e[0m"
-        read -t 2 -N 1 -p "  Enter your choice (refreshes automatically): " choice
+        read -t 2 -p "  Enter your choice (and press Enter): " choice
         if [ -z "\$choice" ]; then continue; fi
         case \$choice in
             1) start_service "Worker" "\$WORKER_SCREEN_NAME" "advanced_worker.py"; echo; read -p "Press [Enter]...";;
@@ -153,7 +149,7 @@ worker_menu() {
             3) print_warning "To detach, press Ctrl+A then D."; sleep 2; screen -r "\$WORKER_SCREEN_NAME" ;;
             4) tail -f bot.log ;;
             0) return ;;
-            *) print_error "Invalid option.";;
+            *) print_error "Invalid option."; echo; read -p "Press [Enter]...";;
         esac
     done
 }
@@ -167,14 +163,14 @@ main_bot_menu() {
         echo "  [3] View Log File"
         echo "  [0] Back to Main Menu"
         echo -e "\e[2m-------------------------------------------------------------------------------\e[0m"
-        read -t 2 -N 1 -p "  Enter your choice (refreshes automatically): " choice
+        read -t 2 -p "  Enter your choice (and press Enter): " choice
         if [ -z "\$choice" ]; then continue; fi
         case \$choice in
             1) start_service "Main Bot" "\$MAIN_BOT_SCREEN_NAME" "main_bot.py"; echo; read -p "Press [Enter]...";;
             2) stop_service "Main Bot" "\$MAIN_BOT_SCREEN_NAME"; echo; read -p "Press [Enter]...";;
             3) tail -f main_bot.log ;;
             0) return ;;
-            *) print_error "Invalid option.";;
+            *) print_error "Invalid option."; echo; read -p "Press [Enter]...";;
         esac
     done
 }
@@ -188,25 +184,24 @@ main_menu() {
         echo "  [3] Update This Manager (coka)"
         echo "  [0] Quit"
         echo -e "\e[2m-------------------------------------------------------------------------------\e[0m"
-        read -t 2 -N 1 -p "  Enter your choice (refreshes automatically): " choice
+        read -t 2 -p "  Enter your choice (and press Enter): " choice
         if [ -z "\$choice" ]; then continue; fi
         case \$choice in
             1) worker_menu ;;
             2) main_bot_menu ;;
-            3) update_manager; exit 0 ;;
+            3) update_manager; ;;
             0) echo "Exiting."; clear; exit 0 ;;
-            *) print_error "Invalid option.";;
+            *) print_error "Invalid option."; echo; read -p "Press [Enter]...";;
         esac
     done
 }
 
-# --- Main Script ---
 cd "\$BOT_DIR" || { print_error "Directory not found: \$BOT_DIR"; exit 1; }
 main_menu
 EOF
 
 # --- Final Step: Make it executable ---
 chmod +x "$COKA_SCRIPT_PATH"
-print_success "Management script 'coka' (v17.0) installed successfully!"
+print_success "Management script 'coka' (v18.0) installed successfully!"
 echo
 coka
