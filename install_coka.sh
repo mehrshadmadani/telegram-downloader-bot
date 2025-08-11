@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # =============================================================
-#         Coka Bot Manager - Universal Smart Installer v15.0 (Flicker-Free)
+#         Coka Bot Manager - Universal Smart Installer v16.0 (Final)
 # =============================================================
 
 COKA_SCRIPT_PATH="/usr/local/bin/coka"
@@ -27,7 +27,7 @@ if [ -f "$COKA_SCRIPT_PATH" ]; then
     EXISTING_MANAGER_URL=$(grep -oP 'MANAGER_SCRIPT_URL="\K[^"]+' "$COKA_SCRIPT_PATH" || echo "$DEFAULT_MANAGER_URL")
     DEFAULT_BOT_DIR=$EXISTING_BOT_DIR
     DEFAULT_MANAGER_URL=$EXISTING_MANAGER_URL
-    read -p "Do you want to force overwrite it with the latest version (v15.0)? (y/n): " OVERWRITE_CONFIRM
+    read -p "Do you want to force overwrite it with the latest version (v16.0)? (y/n): " OVERWRITE_CONFIRM
     if [[ "$OVERWRITE_CONFIRM" != "y" ]]; then
         print_info "Installation cancelled."
         exit 0
@@ -50,7 +50,7 @@ print_info "Creating the 'coka' management script..."
 # --- Writing the coka script content ---
 cat > "$COKA_SCRIPT_PATH" << EOF
 #!/bin/bash
-VERSION="15.0 (Flicker-Free)"
+VERSION="16.0 (Flicker-Free)"
 BOT_DIR="$BOT_DIR"
 MANAGER_SCRIPT_URL="$MANAGER_URL"
 WORKER_SCREEN_NAME="worker_session"
@@ -101,7 +101,7 @@ show_panel() {
     CPU_USAGE=\$(top -bn1 | grep "Cpu(s)" | sed "s/.*, *\([0-9.]*\)%* id.*/\1/" | awk '{print 100 - \$1"%%"}')
     MEM_INFO=\$(free -m | awk 'NR==2{printf "%.2f/%.2f GB (%.0f%%)", \$3/1024, \$2/1024, \$3*100/\$2 }')
     DISK_INFO=\$(df -h / | awk 'NR==2{printf "%s / %s (%s)", \$3, \$2, \$5}')
-    INTERFACE=\$(ip route | grep default | awk '{print \$5}' | head -1)
+    INTERFACE=\$(ip -o -4 route show to default | awk '{print \$5}')
     if [ -z "\$INTERFACE" ]; then
         RX_FORMATTED="N/A"
         TX_FORMATTED="N/A"
@@ -119,8 +119,8 @@ show_panel() {
     if is_running "\$WORKER_SCREEN_NAME"; then W_STATUS="\e[1;32mRUNNING\e[0m"; else W_STATUS="\e[1;31mSTOPPED\e[0m"; fi
     if is_running "\$MAIN_BOT_SCREEN_NAME"; then M_STATUS="\e[1;32mRUNNING\e[0m"; else M_STATUS="\e[1;31mSTOPPED\e[0m"; fi
 
-    # Step 2: Clear the screen
-    clear
+    # Step 2: Move cursor to top-left instead of clearing
+    echo -ne "\033[H"
 
     # Step 3: Print all pre-gathered data instantly
     echo -e "\e[1;35m
@@ -194,7 +194,7 @@ main_menu() {
             1) worker_menu ;;
             2) main_bot_menu ;;
             3) update_manager; exit 0 ;;
-            0) echo "Exiting."; exit 0 ;;
+            0) echo "Exiting."; clear; exit 0 ;;
             *) print_error "Invalid option.";;
         esac
     done
@@ -206,6 +206,6 @@ EOF
 
 # --- Final Step: Make it executable ---
 chmod +x "$COKA_SCRIPT_PATH"
-print_success "Management script 'coka' (v15.0) installed successfully!"
+print_success "Management script 'coka' (v16.0) installed successfully!"
 echo
 coka
