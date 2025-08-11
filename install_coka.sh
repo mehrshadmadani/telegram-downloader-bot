@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # =============================================================
-#         Coka Bot Manager - Universal Smart Installer v31.0 (Full Final)
+#         Coka Bot Manager - Universal Smart Installer v31.0 (Final Stable)
 # =============================================================
 
 COKA_SCRIPT_PATH="/usr/local/bin/coka"
@@ -40,7 +40,7 @@ if [ -f "$COKA_SCRIPT_PATH" ]; then
     fi
 else
     LATEST_VERSION=$(curl -sL "$VERSION_URL" | head -n 1)
-    if [ -z "$LATEST_VERSION" ]; then LATEST_VERSION="31.0 (Final)"; fi
+    if [ -z "$LATEST_VERSION" ]; then LATEST_VERSION="31.0 (Final Stable)"; fi
 fi
 
 # --- Interactive Setup ---
@@ -161,7 +161,6 @@ setup_requirements_cron() {
     print_info "Setting up a weekly cron job to update Python libraries..."
     echo "0 3 * * 0 root \$CRON_COMMAND >> \$BOT_DIR/cron.log 2>&1" | sudo tee "\$CRON_FILE" > /dev/null
     print_success "Cron job created successfully."
-    print_info "Libraries will be updated automatically every Sunday at 3 AM."
 }
 
 remove_requirements_cron() {
@@ -181,7 +180,7 @@ clear_and_prepare_cookies() {
         print_info "Operation cancelled."
         return
     fi
-    print_info "Clearing cookies.txt and preparing for new content..."
+    print_info "Clearing cookies.txt..."
     echo "# Netscape HTTP Cookie File" > "\$BOT_DIR/cookies.txt"
     echo "# Paste your new cookies below this line." >> "\$BOT_DIR/cookies.txt"
     print_success "cookies.txt is now clean and ready."
@@ -190,35 +189,34 @@ clear_and_prepare_cookies() {
 smart_update_config() {
     print_info "Starting smart update for config.py..."
     TEMP_CONFIG="/tmp/config.py.latest"
-    
-    print_info "Downloading latest config template from GitHub..."
+    LOCAL_CONFIG="\$BOT_DIR/config.py"
+    print_info "Downloading latest config template..."
     curl -s -L "\$CONFIG_URL" -o "\$TEMP_CONFIG"
     if [ \$? -ne 0 ] || [ ! -s "\$TEMP_CONFIG" ]; then
-        print_error "Failed to download config template."
-        rm -f "\$TEMP_CONFIG"
-        return
+        print_error "Failed to download config template."; rm -f "\$TEMP_CONFIG"; return
     fi
     
-    ADDED_COUNT=0
-    while IFS= read -r line || [[ -n "\$line" ]]; do
-        if [[ \$line =~ ^#.* ]] || [[ -z \$line ]]; then
-            continue
-        fi
-        var_name=\$(echo "\$line" | cut -d '=' -f 1 | tr -d '[:space:]')
-        if ! grep -q "^\s*\$var_name\s*=" "\$BOT_DIR/config.py"; then
-            print_info "New variable found: '\$var_name'. Adding it to your config.py..."
-            echo "" >> "\$BOT_DIR/config.py"
-            echo "\$line" >> "\$BOT_DIR/config.py"
-            ADDED_COUNT=\$((ADDED_COUNT + 1))
-        fi
-    done < "\$TEMP_CONFIG"
+    local_vars=\$(grep -oP '^\s*\K[A-Z_]+(?=\s*=)' "\$LOCAL_CONFIG")
+    remote_vars=\$(grep -oP '^\s*\K[A-Z_]+(?=\s*=)' "\$TEMP_CONFIG")
+    missing_vars=\$(comm -13 <(echo "\$local_vars" | sort) <(echo "\$remote_vars" | sort))
 
-    if [ \$ADDED_COUNT -gt 0 ]; then
-        print_success "\$ADDED_COUNT new variable(s) added to config.py."
-        print_warning "Please edit the file manually to set their values: 'coka config edit'"
-    else
-        print_success "Your config.py is already up to date. No new variables found."
+    if [ -z "\$missing_vars" ]; then
+        print_success "Your config.py is already up to date."; rm -f "\$TEMP_CONFIG"; return
     fi
+
+    echo "" >> "\$LOCAL_CONFIG"
+    echo "# === Auto-added variables from Smart Update ===" >> "\$LOCAL_CONFIG"
+    ADDED_COUNT=0
+    for var in \$missing_vars; do
+        print_info "New variable found: '\$var'. Adding to config.py..."
+        # This awk command finds the block for the variable and adds it
+        awk -v var="^\$var\s*=" '/\s*# ---.*---/,/^\s*\$/ { if (\$0 ~ var) p=1; if (p) print; if (p && \$0 ~ /^\s*\$/) p=0 }' "\$TEMP_CONFIG" >> "\$LOCAL_CONFIG"
+        echo "" >> "\$LOCAL_CONFIG"
+        ADDED_COUNT=\$((ADDED_COUNT + 1))
+    done
+
+    print_success "\$ADDED_COUNT new variable(s) added to config.py."
+    print_warning "Please edit the file to set their values: 'coka config edit'"
     rm -f "\$TEMP_CONFIG"
 }
 
