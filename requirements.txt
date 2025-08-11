@@ -3,3 +3,5 @@ telethon
 yt-dlp
 psycopg2-binary
 requests
+instagramy
+instagram-scraper
