@@ -1,28 +1,74 @@
 #!/bin/bash
+
 # =============================================================
-#         Coka Bot - Universal Management Script
+#         Coka Bot Manager - Universal Smart Installer v11.0
 # =============================================================
 
-# --- Tanzimat (Settings) ---
-VERSION="10.0 (Final Panel)"
-# !!! MOHEM !!! Lotfan in 2 masir ra check konid.
-# 1. Masir-e kamel-e poosheh-ye robot
-BOT_DIR="/root/telegram-downloader-bot"
-# 2. Link-e mostaghim be file-e install.sh dar GitHub (Raw Link)
-MANAGER_SCRIPT_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/install_coka.sh"
+COKA_SCRIPT_PATH="/usr/local/bin/coka"
 
-# Nam-e session-haye screen
+# --- Functions ---
+print_info() { echo -e "\e[34mINFO: $1\e[0m"; }
+print_success() { echo -e "\e[32mSUCCESS: $1\e[0m"; }
+print_error() { echo -e "\e[31mERROR: $1\e[0m"; }
+print_warning() { echo -e "\e[33mWARNING: $1\e[0m"; }
+
+# --- Main Logic ---
+
+if [ "$(id -u)" -ne 0 ]; then
+  print_error "This script must be run with sudo or as root."
+  exit 1
+fi
+
+# --- Smart Default Value Detection ---
+DEFAULT_BOT_DIR="/root/telegram-downloader-bot"
+DEFAULT_MANAGER_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/install_coka.sh"
+
+if [ -f "$COKA_SCRIPT_PATH" ]; then
+    print_warning "'coka' command is already installed."
+    EXISTING_BOT_DIR=$(grep -oP 'BOT_DIR="\K[^"]+' "$COKA_SCRIPT_PATH" || echo "$DEFAULT_BOT_DIR")
+    EXISTING_MANAGER_URL=$(grep -oP 'MANAGER_SCRIPT_URL="\K[^"]+' "$COKA_SCRIPT_PATH" || echo "$DEFAULT_MANAGER_URL")
+    DEFAULT_BOT_DIR=$EXISTING_BOT_DIR
+    DEFAULT_MANAGER_URL=$EXISTING_MANAGER_URL
+
+    read -p "Do you want to force overwrite it with the latest version (v11.0)? (y/n): " OVERWRITE_CONFIRM
+    if [[ "$OVERWRITE_CONFIRM" != "y" ]]; then
+        print_info "Installation cancelled."
+        exit 0
+    fi
+    print_info "Proceeding with re-installation..."
+fi
+
+# --- Interactive Setup ---
+print_info "Welcome! Let's configure the 'coka' management command."
+echo
+read -p "Enter the full path to your bot directory [Default: $DEFAULT_BOT_DIR]: " BOT_DIR_INPUT
+BOT_DIR=${BOT_DIR_INPUT:-$DEFAULT_BOT_DIR}
+read -p "Enter the raw GitHub URL for this installer script itself [Default: $DEFAULT_MANAGER_URL]: " MANAGER_URL_INPUT
+MANAGER_URL=${MANAGER_URL_INPUT:-$DEFAULT_MANAGER_URL}
+echo
+
+# --- Installation ---
+print_info "Installing required utilities (screen, curl)..."
+apt-get update > /dev/null 2>&1
+apt-get install -y screen curl > /dev/null 2>&1
+print_success "Utilities are ready."
+print_info "Creating the 'coka' management script..."
+
+# --- Writing the coka script content ---
+cat > "$COKA_SCRIPT_PATH" << EOF
+#!/bin/bash
+VERSION="11.0 (Final Panel)"
+BOT_DIR="$BOT_DIR"
+MANAGER_SCRIPT_URL="$MANAGER_URL"
 WORKER_SCREEN_NAME="worker_session"
 MAIN_BOT_SCREEN_NAME="main_bot_session"
 
-# --- Functions ---
 print_info() { echo -e "\e[34mINFO: \$1\e[0m"; }
 print_success() { echo -e "\e[32mSUCCESS: \$1\e[0m"; }
 print_error() { echo -e "\e[31mERROR: \$1\e[0m"; }
 print_warning() { echo -e "\e[33mWARNING: \$1\e[0m"; }
 is_running() { screen -list | grep -q "\$1"; }
 
-# --- Core Logic Functions ---
 start_service() {
     local service_name=\$1
     local screen_name=\$2
@@ -48,20 +94,17 @@ stop_service() {
 
 update_manager() {
     print_info "Updating 'coka' manager script itself..."
-    # This command downloads and runs the installer, which will intelligently update coka
     curl -s -L "\$MANAGER_SCRIPT_URL" | sudo bash
     if [ \$? -eq 0 ]; then
         print_success "'coka' manager has been updated successfully!"
-        print_info "Please run 'coka' again to use the new version."
     else
         print_error "Failed to download or run update script from GitHub."
     fi
 }
 
-# --- UI Functions ---
 show_panel() {
     clear
-    SERVER_IP=\$(hostname -I | awk '{print \$1}')
+    SERVER_IP=\$(hostname -I | cut -d' ' -f1)
     echo -e "\e[1;35m
 ╔════════════════════════════════════════════════════╗
 ║             COKA BOT CONTROL PANEL                 ║
@@ -79,9 +122,9 @@ worker_menu() {
         echo "  Worker Manager Menu:"
         echo "  [1] Start / Restart Worker"
         echo "  [2] Stop Worker"
-        echo "  [3] View Live Dashboard (Dashbord-e Zendeh)"
-        echo "  [4] View Log File (Log-e Fanni)"
-        echo "  [5] Back to Main Menu (Bazgasht)"
+        echo "  [3] View Live Dashboard"
+        echo "  [4] View Log File"
+        echo "  [5] Back to Main Menu"
         echo -e "\e[2m----------------------------------------------------------\e[0m"
         read -p "  Enter your choice: " choice
         case \$choice in
@@ -103,7 +146,7 @@ main_bot_menu() {
         echo "  [1] Start / Restart Main Bot"
         echo "  [2] Stop Main Bot"
         echo "  [3] View Log File"
-        echo "  [4] Back to Main Menu (Bazgasht)"
+        echo "  [4] Back to Main Menu"
         echo -e "\e[2m----------------------------------------------------------\e[0m"
         read -p "  Enter your choice: " choice
         case \$choice in
@@ -137,11 +180,12 @@ main_menu() {
     done
 }
 
-# --- Main Script ---
 cd "\$BOT_DIR" || { print_error "Directory not found: \$BOT_DIR"; exit 1; }
 
-# If arguments are provided, run in command mode
-if [ -n "\$1" ]; then
+if [ -z "\$1" ]; then
+    main_menu
+else
+    # Non-interactive mode for scripting
     case "\$1" in
         start) start_service "\$2" "\${2}_session" "\${2}.py" ;;
         stop) stop_service "\$2" "\${2}_session" ;;
@@ -152,6 +196,9 @@ if [ -n "\$1" ]; then
     esac
     exit 0
 fi
+EOF
 
-# If no arguments, run in interactive menu mode
-main_menu
+chmod +x "$COKA_SCRIPT_PATH"
+print_success "Management script 'coka' (v11.0) installed successfully!"
+echo
+coka
