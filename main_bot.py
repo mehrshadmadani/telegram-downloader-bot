@@ -14,7 +14,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes, CallbackQueryHandler
 from telegram.constants import ChatMemberStatus
 from telegram.error import BadRequest
-from config import (BOT_TOKEN, GROUP_ID, DB_NAME, DB_USER, DB_PASS, DB_HOST, DB_PORT,
+from config import (BOT_TOKEN, GROUP_ID, DB_NAME, DB_USER, DB_PASS, DB_HOST, DB_PORT, 
                     ORDER_TOPIC_ID, LOG_TOPIC_ID, ADMIN_IDS, FORCED_JOIN_CHANNELS,
                     INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD,
                     BUTTON_TEXT, BUTTON_URL, FOOTER_TEXT, USER_COOLDOWN_SECONDS,
@@ -148,7 +148,12 @@ class AdvancedBot:
             username = f"@{user.username}" if user.username else "ندارد"
             log_message = (f"🎉 کاربر جدید\n\nنام: {user.first_name}\nنام کاربری: {username}\nآیدی: [{user.id}](tg://user?id={user.id})")
             await context.bot.send_message(chat_id=self.group_id, text=log_message, message_thread_id=self.log_topic_id, parse_mode='Markdown')
-        await update.message.reply_text(START_MESSAGE)
+
+        chat_id = update.effective_chat.id
+        if update.message:
+            await update.message.reply_text(START_MESSAGE)
+        else:
+            await context.bot.send_message(chat_id=chat_id, text=START_MESSAGE)
 
     async def manage_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.effective_user.id not in self.admin_ids: return
@@ -237,7 +242,7 @@ class AdvancedBot:
             if method == "Instagram Profile":
                 if not self.instagrapi_client: raise Exception("Main bot's Instagrapi client not ready.")
                 username = base64.b64decode(info["CAPTION"]).decode('utf-8').strip()
-                user_info = self.instagrapi_client.user_info_by_username(username).dict()
+                user_info = self.instagrapi_client.user_info_by_username(username).model_dump()
                 full_caption = (f"👤 **{user_info.get('full_name')}** (`@{user_info.get('username')}`)\n\n"
                                 f"**Bio:**\n{user_info.get('biography')}\n\n"
                                 f"----------------------------------------\n"
