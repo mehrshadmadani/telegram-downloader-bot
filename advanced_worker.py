@@ -3,7 +3,7 @@ import asyncio
 import logging
 import json
 import subprocess
-import requests # کتابخانه جدید
+import requests
 from datetime import datetime, timezone
 import yt_dlp
 from telethon import TelegramClient
@@ -24,7 +24,6 @@ class TelethonWorker:
         self.active_jobs = {}
 
     def get_video_metadata(self, file_path):
-        # ... (این تابع بدون تغییر است) ...
         try:
             command = ['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height,duration', '-of', 'json', file_path]
             result = subprocess.run(command, capture_output=True, text=True, check=True)
@@ -34,28 +33,48 @@ class TelethonWorker:
 
     def download_media(self, url, code, user_id):
         self.active_jobs[code] = {"user_id": user_id, "status": "Downloading..."}
-        output_path = os.path.join(self.download_dir, f"{code}.mp4") # اسم فایل ساده‌تر شد
-
-        # --- تغییر کلیدی: منطق جدید برای اینستاگرام ---
+        
+        # --- منطق جدید و هوشمند برای اینستاگرام ---
         if "instagram.com" in url:
             try:
-                # استفاده از همان API که در ربات PHP بود
-                api_url = f"https://api.majidapi.ir/instagram/download?url={url}&out=url&token=gmtbknlkxekej1p:KvnPibe8c0xzbz5U04Fj"
-                api_response = requests.get(api_url, timeout=20)
+                # تشخیص نوع لینک (پست یا پروفایل)
+                if "/p/" in url or "/reel/" in url or "/stories/" in url:
+                    api_url = f"https://api.majidapi.ir/instagram/download?url={url}&out=url&token=gmtbknlkxekej1p:KvnPibe8c0xzbz5U04Fj"
+                else:
+                    username = url.split("instagram.com/")[1].split("/")[0].strip()
+                    api_url = f"https://api.majidapi.ir/instagram/profile?username={username}&token=gmtbknlkxekej1p:KvnPibe8c0xzbz5U04Fj"
+
+                api_response = requests.get(api_url, timeout=30)
                 api_response.raise_for_status()
                 data = api_response.json()
+                
+                media_url = None
+                if data.get("status") == 200:
+                    result = data.get("result", {})
+                    # چک کردن برای ویدیو، عکس، یا اولین آیتم در لیست (برای استوری/اسلایدشو)
+                    if result.get("video"):
+                        media_url = result["video"]
+                    elif result.get("pic"):
+                        media_url = result["pic"]
+                    elif isinstance(result, list) and result and result[0].get("media"):
+                         media_url = result[0]["media"]
 
-                if data.get("status") == 200 and data.get("result", {}).get("video"):
-                    video_url = data["result"]["video"]
+                if media_url:
+                    # تعیین پسوند فایل بر اساس لینک
+                    file_extension = ".jpg" if ".jpg" in media_url else ".mp4"
+                    output_path = os.path.join(self.download_dir, f"{code}{file_extension}")
+                    
                     # دانلود مستقیم فایل از لینک دریافتی
-                    video_response = requests.get(video_url, stream=True)
+                    media_response = requests.get(media_url, stream=True)
+                    media_response.raise_for_status()
                     with open(output_path, 'wb') as f:
-                        for chunk in video_response.iter_content(chunk_size=8192):
+                        for chunk in media_response.iter_content(chunk_size=8192):
                             f.write(chunk)
                     self.active_jobs[code]["status"] = "Downloaded"
                     return output_path
                 else:
-                    raise Exception(f"API Error: {data.get('message', 'Unknown error')}")
+                    raise Exception(f"API Error: Media URL not found in response {data}")
+
             except Exception as e:
                 logger.error(f"Khata dar download Instagram (API) baraye CODE {code}: {e}")
                 self.active_jobs[code]["status"] = "Download Failed"
@@ -63,24 +82,18 @@ class TelethonWorker:
         
         # --- منطق قبلی برای بقیه پلتفرم‌ها ---
         output_path = os.path.join(self.download_dir, f"{code} - %(title).30s.%(ext)s")
-        if "soundcloud.com" in url or "spotify" in url:
-            ydl_opts = {'outtmpl': output_path, 'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None, 'format': 'bestaudio/best', 'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3'}]}
-        else: # YouTube
-            ydl_opts = {'outtmpl': output_path, 'format': 'bestvideo[height<=720]+bestaudio/best[height<=720]/best', 'merge_output_format': 'mp4', 'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None}
-        
+        # ... (بقیه کد دانلود برای یوتیوب، ساندکلود و ... بدون تغییر) ...
+        if "soundcloud.com" in url or "spotify" in url: ydl_opts = {'outtmpl': output_path, 'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None, 'format': 'bestaudio/best', 'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3'}]}
+        else: ydl_opts = {'outtmpl': output_path, 'format': 'bestvideo[height<=720]+bestaudio/best[height<=720]/best', 'merge_output_format': 'mp4', 'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None}
         ydl_opts.update({'ignoreerrors': True, 'quiet': True, 'no_warnings': True})
-
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([url])
+                ydl.download([url]);
                 for f in os.listdir(self.download_dir):
-                    if f.startswith(code):
-                        downloaded_file = os.path.join(self.download_dir, f)
-                        self.active_jobs[code]["status"] = "Downloaded"; return downloaded_file
+                    if f.startswith(code): downloaded_file = os.path.join(self.download_dir, f); self.active_jobs[code]["status"] = "Downloaded"; return downloaded_file
             return None
-        except: 
-            self.active_jobs[code]["status"] = "Download Failed"; return None
-    
+        except: self.active_jobs[code]["status"] = "Download Failed"; return None
+
     # ... (بقیه توابع کلاس بدون تغییر باقی می‌مانند) ...
     async def upload_progress(self, sent_bytes, total_bytes, code):
         percentage = int(sent_bytes * 100 / total_bytes)
