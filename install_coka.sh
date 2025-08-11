@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # =============================================================
-#         Coka Bot Manager - Universal Smart Installer v32.0 (Final Complete)
+#         Coka Bot Manager - Universal Smart Installer v33.0 (Final Version)
 # =============================================================
 
 COKA_SCRIPT_PATH="/usr/local/bin/coka"
@@ -24,10 +24,14 @@ DEFAULT_MANAGER_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-d
 
 if [ -f "$COKA_SCRIPT_PATH" ]; then
     print_warning "'coka' command is already installed."
+    
+    # --- Fetch latest version from version.txt ---
     print_info "Fetching latest version info from GitHub..."
     LATEST_VERSION=$(curl -sL "$VERSION_URL" | head -n 1)
-    if [ -z "$LATEST_VERSION" ]; then LATEST_VERSION="N/A"; fi
-    
+    if [ -z "$LATEST_VERSION" ]; then
+        LATEST_VERSION="N/A"
+    fi
+
     EXISTING_BOT_DIR=$(grep -oP 'BOT_DIR="\K[^"]+' "$COKA_SCRIPT_PATH" || echo "$DEFAULT_BOT_DIR")
     EXISTING_MANAGER_URL=$(grep -oP 'MANAGER_SCRIPT_URL="\K[^"]+' "$COKA_SCRIPT_PATH" || echo "$DEFAULT_MANAGER_URL")
     DEFAULT_BOT_DIR=$EXISTING_BOT_DIR
@@ -40,7 +44,7 @@ if [ -f "$COKA_SCRIPT_PATH" ]; then
     fi
 else
     LATEST_VERSION=$(curl -sL "$VERSION_URL" | head -n 1)
-    if [ -z "$LATEST_VERSION" ]; then LATEST_VERSION="32.0 (Final)"; fi
+    if [ -z "$LATEST_VERSION" ]; then LATEST_VERSION="33.0 (Final Version)"; fi
 fi
 
 # --- Interactive Setup ---
