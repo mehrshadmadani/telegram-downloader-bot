@@ -1,10 +1,11 @@
 #!/bin/bash
 
 # =============================================================
-#         Coka Bot Manager - Universal Smart Installer v20.0 (Final)
+#         Coka Bot Manager - Universal Smart Installer v21.0 (Final Version)
 # =============================================================
 
 COKA_SCRIPT_PATH="/usr/local/bin/coka"
+VERSION_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/version.txt"
 
 # --- Functions ---
 print_info() { echo -e "\e[34mINFO: $1\e[0m"; }
@@ -20,19 +21,16 @@ fi
 
 DEFAULT_BOT_DIR="/root/telegram-downloader-bot"
 DEFAULT_MANAGER_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/install_coka.sh"
-TEMP_INSTALLER_PATH="/tmp/coka_installer_latest.sh"
 
 if [ -f "$COKA_SCRIPT_PATH" ]; then
     print_warning "'coka' command is already installed."
     
-    # --- Fetch latest version number from GitHub ---
+    # --- Fetch latest version from version.txt ---
     print_info "Fetching latest version info from GitHub..."
-    curl -sL "$DEFAULT_MANAGER_URL" -o "$TEMP_INSTALLER_PATH"
-    LATEST_VERSION="N/A"
-    if [ -s "$TEMP_INSTALLER_PATH" ]; then
-        LATEST_VERSION=$(grep -oP 'VERSION="\K[^"]+' "$TEMP_INSTALLER_PATH" | head -1)
+    LATEST_VERSION=$(curl -sL "$VERSION_URL" | head -n 1)
+    if [ -z "$LATEST_VERSION" ]; then
+        LATEST_VERSION="N/A"
     fi
-    rm -f "$TEMP_INSTALLER_PATH"
 
     EXISTING_BOT_DIR=$(grep -oP 'BOT_DIR="\K[^"]+' "$COKA_SCRIPT_PATH" || echo "$DEFAULT_BOT_DIR")
     EXISTING_MANAGER_URL=$(grep -oP 'MANAGER_SCRIPT_URL="\K[^"]+' "$COKA_SCRIPT_PATH" || echo "$DEFAULT_MANAGER_URL")
@@ -43,6 +41,12 @@ if [ -f "$COKA_SCRIPT_PATH" ]; then
     if [[ "$OVERWRITE_CONFIRM" != "y" ]]; then
         print_info "Installation cancelled."
         exit 0
+    fi
+else
+    # If not installed, fetch version for the first time
+    LATEST_VERSION=$(curl -sL "$VERSION_URL" | head -n 1)
+    if [ -z "$LATEST_VERSION" ]; then
+        LATEST_VERSION="21.0 (Final Version)" # Fallback version
     fi
 fi
 
@@ -62,7 +66,7 @@ print_info "Creating the 'coka' management script..."
 # --- Writing the coka script content ---
 cat > "$COKA_SCRIPT_PATH" << EOF
 #!/bin/bash
-VERSION="20.0 (Final Stable)"
+VERSION="$LATEST_VERSION"
 BOT_DIR="$BOT_DIR"
 MANAGER_SCRIPT_URL="$MANAGER_URL"
 WORKER_SCREEN_NAME="worker_session"
@@ -194,7 +198,6 @@ main_menu() {
             0) echo "Exiting."; clear; exit 0 ;;
             *) print_error "Invalid option." ;;
         esac
-        echo; read -p "Press [Enter] to continue..."
     done
 }
 
@@ -204,6 +207,6 @@ EOF
 
 # --- Final Step: Make it executable ---
 chmod +x "$COKA_SCRIPT_PATH"
-print_success "Management script 'coka' (v20.0) installed successfully!"
+print_success "Management script 'coka' (v$LATEST_VERSION) installed successfully!"
 echo
 coka
