@@ -20,24 +20,29 @@ logging.getLogger("telethon").setLevel(logging.WARNING)
 
 class TelethonWorker:
     def __init__(self, api_id, api_hash, phone):
-        self.app = TelegramClient("telethon_session", api_id, api_hash)
-        self.phone = phone; self.download_dir = "downloads"; os.makedirs(self.download_dir, exist_ok=True)
+        self.app = TelegramClient("telethon_session", api_id, api_hash); self.phone = phone
+        self.download_dir = "downloads"; os.makedirs(self.download_dir, exist_ok=True)
         self.processed_ids = set(); self.start_time = datetime.now(timezone.utc); self.active_jobs = {}
+        self.instaloader_client = instaloader.Instaloader(dirname_pattern=os.path.join(self.download_dir, "{target}"), save_metadata=False, compress_json=False, post_metadata_txt_pattern="")
         self.instagrapi_client = InstagrapiClient()
-        session_file = "insta_session.json"
         try:
-            if os.path.exists(session_file):
-                logger.info("Loading Instagram session from file...")
-                self.instagrapi_client.load_settings(session_file)
-                self.instagrapi_client.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
-                logger.info("Instagram session loaded and refreshed.")
-            else:
-                logger.info("Instagram session file not found. Logging in...")
-                self.instagrapi_client.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
-                self.instagrapi_client.dump_settings(session_file)
-                logger.info("Instagram login successful and session saved.")
+            logger.info("Loading Instagram sessions...")
+            self.instaloader_client.load_session_from_file(INSTAGRAM_USERNAME)
+            self.instagrapi_client.load_settings("insta_session.json")
+            self.instagrapi_client.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
+            logger.info("All Instagram sessions loaded successfully.")
         except Exception as e:
-            logger.error(f"FATAL: Failed to login to Instagram with instagrapi: {e}")
+            logger.error(f"Session loading failed, attempting fresh login: {e}")
+            self.setup_instagram_sessions()
+
+    def setup_instagram_sessions(self):
+        try:
+            logger.info("Attempting fresh login for instagrapi...")
+            self.instagrapi_client.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
+            self.instagrapi_client.dump_settings("insta_session.json")
+            logger.info("instagrapi login successful and session saved.")
+        except Exception as e:
+            logger.error(f"FATAL: instagrapi login failed: {e}")
 
     def get_video_metadata(self, file_path):
         try:
@@ -49,14 +54,13 @@ class TelethonWorker:
     def download_media(self, url, code, user_id):
         self.active_jobs[code] = {"user_id": user_id, "status": "Downloading..."}
         
-        # --- منطق دانلود چند مرحله‌ای ---
         if "instagram.com" in url:
-            # 1. تلاش با instagrapi (قدرتمندترین روش)
+            # 1. تلاش با instagrapi
             try:
                 logger.info(f"Attempt 1 (instagrapi) for CODE: {code}")
                 media_pk = self.instagrapi_client.media_pk_from_url(url); media_info = self.instagrapi_client.media_info(media_pk).dict()
                 media_type = media_info.get("media_type"); output_path = None
-                if media_type in [1, 2]: # Photo or Video
+                if media_type in [1, 2]:
                     output_path = self.instagrapi_client.video_download(media_pk, self.download_dir) if media_type == 2 else self.instagrapi_client.photo_download(media_pk, self.download_dir)
                 if output_path:
                     final_path = os.path.join(self.download_dir, f"{code}{os.path.splitext(output_path)[1]}")
@@ -64,27 +68,63 @@ class TelethonWorker:
                     self.active_jobs[code]["status"] = "Downloaded"; return final_path
             except Exception as e: logger.warning(f"instagrapi failed for {code}: {e}")
             
-            # 2. تلاش نهایی با NestCode API (بر اساس کشف شما)
+            # 2. تلاش با instaloader
+            try:
+                logger.info(f"Attempt 2 (instaloader) for CODE: {code}")
+                shortcode = url.split('/')[-2]; post = instaloader.Post.from_shortcode(self.instaloader_client.context, shortcode)
+                self.instaloader_client.download_post(post, target=f"{code}_temp")
+                dl_folder = os.path.join(self.download_dir, f"{code}_temp")
+                for filename in os.listdir(dl_folder):
+                    if not filename.endswith(('.txt', '.json', '.xz')):
+                        src = os.path.join(dl_folder, filename); final_path = os.path.join(self.download_dir, f"{code}{os.path.splitext(filename)[1]}")
+                        os.rename(src, final_path);
+                        for f_extra in os.listdir(dl_folder): os.remove(os.path.join(dl_folder, f_extra))
+                        os.rmdir(dl_folder)
+                        self.active_jobs[code]["status"] = "Downloaded"; return final_path
+            except Exception as e: logger.warning(f"Instaloader failed for {code}: {e}")
+            
+            # 3. تلاش با yt-dlp
+            try:
+                logger.info(f"Attempt 3 (yt-dlp) for CODE: {code}")
+                output_path_yt = os.path.join(self.download_dir, f"{code} - %(title).30s.%(ext)s")
+                ydl_opts = {'outtmpl': output_path_yt, 'cookiefile': 'cookies.txt', 'format': 'best', 'ignoreerrors': True, 'quiet': True, 'no_warnings': True, 'socket_timeout': 1800}
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.download([url])
+                    for f in os.listdir(self.download_dir):
+                        if f.startswith(code): self.active_jobs[code]["status"] = "Downloaded"; return os.path.join(self.download_dir, f)
+            except Exception as e: logger.warning(f"yt-dlp failed for {code}: {e}")
+            
+            # 4. تلاش با MajidAPI
+            try:
+                logger.info(f"Attempt 4 (MajidAPI) for CODE: {code}")
+                api_url = f"https://api.majidapi.ir/instagram/download?url={url}&out=url&token={MAJID_API_TOKEN}"
+                api_response = requests.get(api_url, timeout=20); data = api_response.json()
+                if data.get("status") == 200:
+                    result = data.get("result", {}); media_url = result.get("video") or result.get("image")
+                    if media_url:
+                        ext = ".jpg" if ".jpg" in media_url.split('?')[0] else ".mp4"; output_path = os.path.join(self.download_dir, f"{code}{ext}")
+                        media_res = requests.get(media_url, stream=True, timeout=1800)
+                        with open(output_path, 'wb') as f:
+                            for chunk in media_res.iter_content(chunk_size=8192): f.write(chunk)
+                        self.active_jobs[code]["status"] = "Downloaded"; return output_path
+            except Exception as e: logger.warning(f"MajidAPI failed for {code}: {e}")
+
+            # 5. تلاش نهایی با NestCode API
             try:
                 logger.info(f"Final Attempt (NestCode API) for CODE: {code}")
                 api_url = f"https://open.nestcode.org/apis-1/InstagramDownloader?url={url}&key={NESTCODE_API_KEY}"
                 api_response = requests.get(api_url, timeout=30); data = api_response.json()
-                if data.get("status") == "success":
-                    medias = data.get("data", {}).get("medias")
-                    if medias and isinstance(medias, list):
-                        get_file_url = medias[0]
-                        media_res = requests.get(get_file_url, stream=True, timeout=1800)
-                        media_res.raise_for_status()
-                        
-                        # تشخیص پسوند فایل از هدر پاسخ
-                        content_type = media_res.headers.get('content-type', '')
-                        ext = ".jpg" if "image" in content_type else ".mp4"
-                        output_path = os.path.join(self.download_dir, f"{code}{ext}")
-
+                if data.get("ok"):
+                    media_url = data.get("result", {}).get("link")
+                    if media_url:
+                        ext = ".jpg" if ".jpg" in media_url.split('?')[0] else ".mp4"; output_path = os.path.join(self.download_dir, f"{code}{ext}")
+                        media_res = requests.get(media_url, stream=True, timeout=1800)
                         with open(output_path, 'wb') as f:
                             for chunk in media_res.iter_content(chunk_size=8192): f.write(chunk)
                         self.active_jobs[code]["status"] = "Downloaded"; return output_path
             except Exception as e: logger.error(f"All methods failed. Last error from NestCode API: {e}")
+
+        # --- منطق دانلود برای پلتفرم‌های دیگر ---
         else:
             # ... (کد yt-dlp برای یوتیوب، ساندکلود و ... بدون تغییر) ...
             logger.info(f"Using yt-dlp for {url.split('/')[2]} CODE: {code}")
@@ -97,11 +137,11 @@ class TelethonWorker:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     ydl.download([url])
                     for f in os.listdir(self.download_dir):
-                        if f.startswith(code): self.active_jobs[code]["status"] = "Downloaded"; return os.path.join(self.download_dir, f)
+                        if f.startswith(code): return os.path.join(self.download_dir, f)
             except Exception as e: logger.error(f"yt-dlp failed for CODE {code}: {e}")
-
+        
         self.active_jobs[code]["status"] = "Download Failed"; return None
-    
+
     # ... (بقیه توابع کلاس بدون تغییر) ...
     async def upload_progress(self, sent_bytes, total_bytes, code):
         percentage = int(sent_bytes * 100 / total_bytes);
@@ -138,7 +178,7 @@ class TelethonWorker:
                 for code, data in list(self.active_jobs.items()):
                     print(f"{code:<12} | {data.get('user_id', 'N/A'):<12} | {data.get('status', 'N/A'):<20}")
                     if data.get('status') in ["Completed", "Download Failed", "Upload Failed"]:
-                        await asyncio.sleep(5); self.active_jobs.pop(code, None)
+                        await asyncio.sleep(3); self.active_jobs.pop(code, None)
             print("-" * 50); print(f"Last Update: {datetime.now().strftime('%H:%M:%S')}"); await asyncio.sleep(1)
     async def run(self):
         await self.app.start(phone=self.phone)
