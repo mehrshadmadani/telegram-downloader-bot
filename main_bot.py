@@ -6,18 +6,27 @@ import re
 import logging
 from functools import wraps
 import yt_dlp
+from instagrapi import Client as InstagrapiClient
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes, CallbackQueryHandler
 from telegram.constants import ChatMemberStatus
 from telegram.error import BadRequest
-from config import (BOT_TOKEN, GROUP_ID, DB_NAME, DB_USER, DB_PASS,
-                    DB_HOST, DB_PORT, ORDER_TOPIC_ID, LOG_TOPIC_ID, ADMIN_IDS, FORCED_JOIN_CHANNELS)
+from config import (BOT_TOKEN, GROUP_ID, DB_NAME, DB_USER, DB_PASS, DB_HOST, DB_PORT, 
+                    ORDER_TOPIC_ID, LOG_TOPIC_ID, ADMIN_IDS, FORCED_JOIN_CHANNELS,
+                    INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
 
-# راه‌اندازی لاگ برای این فایل
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(name)s - %(message)s')
+# --- سیستم لاگ‌گیری ---
 logger = logging.getLogger(__name__)
-
+logger.setLevel(logging.INFO)
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - [%(funcName)s] - %(message)s')
+if logger.hasHandlers(): logger.handlers.clear()
+stream_handler = logging.StreamHandler()
+stream_handler.setFormatter(formatter)
+logger.addHandler(stream_handler)
+file_handler_main = logging.FileHandler('main_bot.log', encoding='utf-8')
+file_handler_main.setFormatter(formatter)
+logger.addHandler(file_handler_main)
 
 class PostgresDB:
     def __init__(self):
@@ -46,7 +55,6 @@ class PostgresDB:
                 cur.execute("INSERT INTO jobs (code, user_id, url) VALUES (%s, %s, %s);", (code, user_id, url))
 
     def get_job_by_code(self, code):
-        """اطلاعات کامل یک کار را با استفاده از کد آن برمی‌گرداند."""
         with self.get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT user_id, url FROM jobs WHERE code = %s;", (code,))
@@ -78,7 +86,6 @@ def membership_required(func):
         user = update.effective_user
         if not user or not FORCED_JOIN_CHANNELS:
             return await func(self, update, context, *args, **kwargs)
-        
         channels_to_join = []
         for channel in FORCED_JOIN_CHANNELS:
             try:
@@ -87,7 +94,6 @@ def membership_required(func):
                     channels_to_join.append(channel)
             except:
                 channels_to_join.append(channel)
-        
         if channels_to_join:
             buttons = [[InlineKeyboardButton(f"عضویت در {channel.lstrip('@')}", url=f"https://t.me/{channel.lstrip('@')}")] for channel in channels_to_join]
             buttons.append([InlineKeyboardButton("✅ بررسی عضویت", callback_data="check_membership")])
@@ -98,7 +104,6 @@ def membership_required(func):
             else:
                 await update.message.reply_text(text, reply_markup=reply_markup)
             return
-            
         if update.callback_query:
             await update.callback_query.answer("عضویت شما تایید شد!")
             await update.callback_query.delete_message()
@@ -114,7 +119,21 @@ class AdvancedBot:
         self.admin_ids = admin_ids
         self.db = PostgresDB()
         self.app = Application.builder().token(self.token).build()
+        self.instagrapi_client = self.setup_instagrapi_client()
 
+    def setup_instagrapi_client(self):
+        try:
+            client = InstagrapiClient()
+            session_file = f"main_bot_instagrapi_session.json"
+            if os.path.exists(session_file): client.load_settings(session_file)
+            client.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
+            client.dump_settings(session_file)
+            logger.info("✅ Main Bot Instagrapi session loaded/created.")
+            return client
+        except Exception as e:
+            logger.error(f"❌ Main Bot could not login to Instagram. Error: {e}")
+            return None
+    
     @membership_required
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
@@ -135,7 +154,7 @@ class AdvancedBot:
         query = update.callback_query
         await query.answer("در حال محاسبه آمار...")
         stats = self.db.get_bot_statistics()
-        text = f"📊 **آمار کلی ربات**\n━━━━━━━━━━━━━━━━━━\n👥 **کل کاربران:** {stats.get('total_users', 0)}"
+        text = f"📊 **آمار کلی ربات**\n━━━━━━━━━━━━━━━━━━\n👥 **کل کاربران:** {stats.get('total_users', 0)}\n📥 **کل دانلودها:** {stats.get('total_downloads', 0)}\n💾 **حجم کل:** {stats.get('total_volume_gb', 0):.2f} GB"
         await query.edit_message_text(text, parse_mode='Markdown')
 
     @membership_required
@@ -150,64 +169,69 @@ class AdvancedBot:
         await update.message.reply_text(f"✅ **درخواست ثبت شد!**\n\n🏷️ **کد پیگیری:** `{code}`", parse_mode='Markdown')
 
     async def handle_group_files(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not update.message or not update.message.caption or update.message.message_thread_id != self.order_topic_id or "CODE:" not in update.message.caption:
+        if not update.message or not update.message.caption or update.message.message_thread_id != self.order_topic_id:
             return
         try:
             caption_lines = update.message.caption.split('\n')
             info = {line.split(":", 1)[0].strip(): line.split(":", 1)[1].strip() for line in caption_lines if ":" in line}
             
-            code, size = info.get("CODE"), int(info.get("SIZE", 0))
+            code, size, method = info.get("CODE"), int(info.get("SIZE", 0)), info.get("METHOD")
             job_info = self.db.get_job_by_code(code)
             if not job_info: return
             
             user_id, original_url = job_info['user_id'], job_info['url']
             self.db.update_job_on_complete(code, 'completed', size)
-            
-            full_description, title = "", ""
-            try:
-                with yt_dlp.YoutubeDL({'quiet': True, 'ignoreerrors': True, 'cookiefile': 'cookies.txt'}) as ydl:
-                    meta = ydl.extract_info(original_url, download=False)
-                    if meta:
-                        full_description = meta.get('description', '')
-                        title = meta.get('title', '')
-            except Exception as e:
-                logger.error(f"Could not fetch metadata for {original_url}: {e}")
-                try:
-                    title = base64.b64decode(info["CAPTION"]).decode('utf-8').strip()
-                except:
-                    title = "فایل شما"
 
             footer = ("\n\n—————————————————\n"
                       "🍭 Download by [CokaDownloader](https://t.me/parsvip0_bot?start=0)")
-
-            item_info_str = next((line for line in caption_lines if line.startswith("✅ Uploaded")), "")
-            match = re.search(r'\((\d+)/(\d+)\)', item_info_str)
-            slide_info = f"\n\nاسلاید {match.group(1)} از {match.group(2)}" if match else ""
-
+            
             async def send_media_to_user(media_type, file_id, caption_text):
-                actions = {
-                    'video': context.bot.send_video, 'audio': context.bot.send_audio,
-                    'photo': context.bot.send_photo, 'document': context.bot.send_document
-                }
+                actions = {'video': context.bot.send_video, 'audio': context.bot.send_audio, 'photo': context.bot.send_photo, 'document': context.bot.send_document}
                 kwargs = {'chat_id': user_id, media_type: file_id, 'caption': caption_text, 'parse_mode': 'Markdown'}
                 await actions[media_type](**kwargs)
-
+            
             media_type = next((mt for mt in ['video', 'audio', 'photo', 'document'] if getattr(update.message, mt)), None)
             file_id = getattr(update.message, media_type).file_id if media_type != 'photo' else getattr(update.message, media_type)[-1].file_id
 
-            if full_description and len(full_description) > 1000:
-                short_caption = (title + slide_info + footer).strip()
-                await send_media_to_user(media_type, file_id, short_caption)
-                for i in range(0, len(full_description), 4096):
-                    await context.bot.send_message(chat_id=user_id, text=full_description[i:i+4096], disable_web_page_preview=True)
+            if method == "Instagram Profile":
+                if not self.instagrapi_client: raise Exception("Main bot's Instagrapi client not ready.")
+                username = base64.b64decode(info["CAPTION"]).decode('utf-8').strip()
+                user_info = self.instagrapi_client.user_info_by_username(username).dict()
+                full_caption = (f"👤 **{user_info.get('full_name')}** (`@{user_info.get('username')}`)\n\n"
+                                f"**Bio:**\n{user_info.get('biography')}\n\n"
+                                f"----------------------------------------\n"
+                                f"**Posts:** {user_info.get('media_count')} | "
+                                f"**Followers:** {user_info.get('follower_count')} | "
+                                f"**Following:** {user_info.get('following_count')}" + footer)
+                await send_media_to_user('photo', file_id, full_caption)
             else:
-                caption_content = full_description if full_description else title
-                full_caption = (caption_content + slide_info + footer).strip()
-                await send_media_to_user(media_type, file_id, full_caption)
+                full_description, title = "", ""
+                try:
+                    with yt_dlp.YoutubeDL({'quiet': True, 'ignoreerrors': True, 'cookiefile': 'cookies.txt'}) as ydl:
+                        meta = ydl.extract_info(original_url, download=False)
+                        if meta:
+                            full_description = meta.get('description', '')
+                            title = meta.get('title', '')
+                except Exception:
+                    try: title = base64.b64decode(info["CAPTION"]).decode('utf-8').strip()
+                    except: title = "فایل شما"
 
+                item_info_str = next((line for line in caption_lines if line.startswith("✅ Uploaded")), "")
+                match = re.search(r'\((\d+)/(\d+)\)', item_info_str)
+                slide_info = f"\n\nاسلاید {match.group(1)} از {match.group(2)}" if match else ""
+                
+                if full_description and len(full_description) > 1000:
+                    short_caption = (title + slide_info + footer).strip()
+                    await send_media_to_user(media_type, file_id, short_caption)
+                    for i in range(0, len(full_description), 4096):
+                        await context.bot.send_message(chat_id=user_id, text=full_description[i:i+4096], disable_web_page_preview=True)
+                else:
+                    caption_content = full_description if full_description else title
+                    full_caption = (caption_content + slide_info + footer).strip()
+                    await send_media_to_user(media_type, file_id, full_caption)
         except Exception as e:
-            logger.error(f"❌ Error processing group file: {e}", exc_info=True)
-    
+            logger.error(f"❌ Error processing group file for code {info.get('CODE', 'N/A')}: {e}", exc_info=True)
+
     async def check_membership_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await self.start_command(update, context)
 
