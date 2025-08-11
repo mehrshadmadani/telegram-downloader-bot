@@ -13,10 +13,9 @@ from config import (TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_PHONE,
                     GROUP_ID, ORDER_TOPIC_ID, MAJID_API_TOKEN, 
                     INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
 
-# --- سیستم لاگ‌گیری ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-logging.getLogger("telethon").setLevel(logging.WARNING) # کاهش لاگ‌های اضافی تلگرام
+logging.getLogger("telethon").setLevel(logging.WARNING)
 
 class TelethonWorker:
     def __init__(self, api_id, api_hash, phone):
@@ -27,7 +26,6 @@ class TelethonWorker:
         self.processed_ids = set()
         self.start_time = datetime.now(timezone.utc)
         self.active_jobs = {}
-        # --- اصلاحیه نهایی: استفاده از فایل Session ---
         self.insta_loader = instaloader.Instaloader(
             dirname_pattern=os.path.join(self.download_dir, "{target}"),
             save_metadata=False, compress_json=False, post_metadata_txt_pattern=""
@@ -121,19 +119,26 @@ class TelethonWorker:
                 if os.path.exists(file_path): os.remove(file_path)
     async def display_dashboard(self):
         while True:
-            os.system('clear' if os.name == 'posix' else 'cls'); print("--- 🚀 Advanced Downloader Dashboard 🚀 ---")
-            print(f"{'Job Code':<12} | {'User ID':<12} | {'Status':<20}"); print("-" * 50)
-            if not self.active_jobs: print("... Waiting for new jobs ...")
+            # --- تغییر کلیدی: غیرفعال کردن پاک‌سازی صفحه ---
+            # os.system('clear' if os.name == 'posix' else 'cls')
+            print("\n--- 🚀 Dashboard Update 🚀 ---")
+            print(f"{'Job Code':<12} | {'User ID':<12} | {'Status':<20}")
+            print("-" * 50)
+            if not self.active_jobs:
+                print("... Waiting for new jobs ...")
             else:
                 for code, data in list(self.active_jobs.items()):
                     print(f"{code:<12} | {data.get('user_id', 'N/A'):<12} | {data.get('status', 'N/A'):<20}")
                     if data.get('status') in ["Completed", "Download Failed", "Upload Failed"]:
-                        await asyncio.sleep(3); self.active_jobs.pop(code, None)
-            print("-" * 50); print(f"Last Update: {datetime.now().strftime('%H:%M:%S')}"); await asyncio.sleep(1)
+                        await asyncio.sleep(3)
+                        self.active_jobs.pop(code, None)
+            print("-" * 50)
+            await asyncio.sleep(5) # آپدیت داشبورد هر ۵ ثانیه
+
     async def run(self):
         await self.app.start(phone=self.phone)
         me = await self.app.get_me()
-        logger.info(f"Worker (Session-Based) ba movaffaghiat be onvane {me.first_name} vared shod.")
+        logger.info(f"Worker (Debug Version) ba movaffaghiat be onvane {me.first_name} vared shod.")
         target_chat_id = GROUP_ID; target_topic_id = ORDER_TOPIC_ID
         try: entity = await self.app.get_entity(target_chat_id)
         except Exception as e: logger.critical(f"Nemitavan be Group ID dastresi peyda kard. Khata: {e}"); return
@@ -150,4 +155,4 @@ class TelethonWorker:
 async def main():
     worker = TelethonWorker(api_id=TELEGRAM_API_ID, api_hash=TELEGRAM_API_HASH, phone=TELEGRAM_PHONE); await worker.run()
 if __name__ == "__main__":
-    print("--- Rah andazi Session-Based Instaloader Worker ---"); asyncio.run(main())
+    print("--- Rah andazi Debug Worker ---"); asyncio.run(main())
