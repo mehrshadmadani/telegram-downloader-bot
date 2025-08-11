@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # =============================================================
-#         Coka Bot Manager - Universal Smart Installer v22.0 (Final Fix)
+#         Coka Bot Manager - Universal Smart Installer v23.0 (Smart Update Prompt)
 # =============================================================
 
 COKA_SCRIPT_PATH="/usr/local/bin/coka"
@@ -24,12 +24,15 @@ DEFAULT_MANAGER_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-d
 
 if [ -f "$COKA_SCRIPT_PATH" ]; then
     print_warning "'coka' command is already installed."
+    print_info "Fetching latest version info from GitHub..."
     LATEST_VERSION=$(curl -sL "$VERSION_URL" | head -n 1)
     if [ -z "$LATEST_VERSION" ]; then LATEST_VERSION="N/A"; fi
+    
     EXISTING_BOT_DIR=$(grep -oP 'BOT_DIR="\K[^"]+' "$COKA_SCRIPT_PATH" || echo "$DEFAULT_BOT_DIR")
     EXISTING_MANAGER_URL=$(grep -oP 'MANAGER_SCRIPT_URL="\K[^"]+' "$COKA_SCRIPT_PATH" || echo "$DEFAULT_MANAGER_URL")
     DEFAULT_BOT_DIR=$EXISTING_BOT_DIR
     DEFAULT_MANAGER_URL=$EXISTING_MANAGER_URL
+    
     read -p "Do you want to force overwrite it with the latest version from GitHub (v$LATEST_VERSION)? (y/n): " OVERWRITE_CONFIRM
     if [[ "$OVERWRITE_CONFIRM" != "y" ]]; then
         print_info "Installation cancelled."
@@ -37,7 +40,7 @@ if [ -f "$COKA_SCRIPT_PATH" ]; then
     fi
 else
     LATEST_VERSION=$(curl -sL "$VERSION_URL" | head -n 1)
-    if [ -z "$LATEST_VERSION" ]; then LATEST_VERSION="22.0 (Final Fix)"; fi
+    if [ -z "$LATEST_VERSION" ]; then LATEST_VERSION="23.0 (Smart Update)"; fi
 fi
 
 # --- Interactive Setup ---
@@ -59,6 +62,7 @@ cat > "$COKA_SCRIPT_PATH" << EOF
 VERSION="$LATEST_VERSION"
 BOT_DIR="$BOT_DIR"
 MANAGER_SCRIPT_URL="$MANAGER_URL"
+VERSION_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/version.txt"
 WORKER_SCREEN_NAME="worker_session"
 MAIN_BOT_SCREEN_NAME="main_bot_session"
 
@@ -89,7 +93,14 @@ stop_service() {
 }
 
 update_manager() {
-    print_warning "This will update the 'coka' script to the latest version from GitHub."
+    print_info "Fetching latest version info from GitHub..."
+    LATEST_VERSION=\$(curl -sL "\$VERSION_URL" | head -n 1)
+    if [ -z "\$LATEST_VERSION" ]; then
+        print_error "Could not fetch latest version info."
+        return
+    fi
+
+    print_warning "This will update the 'coka' script to v\$LATEST_VERSION."
     read -p "Are you sure you want to continue? (y/n): " UPDATE_CONFIRM
     if [[ "\$UPDATE_CONFIRM" != "y" ]]; then
         print_info "Update cancelled."
@@ -116,10 +127,10 @@ show_panel_and_menu() {
     if is_running "\$WORKER_SCREEN_NAME"; then W_STATUS="\e[1;32mRUNNING\e[0m"; else W_STATUS="\e[1;31mSTOPPED\e[0m"; fi
     if is_running "\$MAIN_BOT_SCREEN_NAME"; then M_STATUS="\e[1;32mRUNNING\e[0m"; else M_STATUS="\e[1;31mSTOPPED\e[0m"; fi
 
-    echo
-    echo -e "\e[1;35m╔═════════════════════════════════════════════════════════════════════════════╗"
-    echo -e "\e[1;35m║                          COKA BOT CONTROL PANEL                             ║"
-    echo -e "\e[1;35m╚═════════════════════════════════════════════════════════════════════════════╝\e[0m"
+    echo -e "\e[1;35m
+╔═════════════════════════════════════════════════════════════════════════════╗
+║                          COKA BOT CONTROL PANEL                             ║
+╚═════════════════════════════════════════════════════════════════════════════╝\e[0m"
     echo -e "  \e[1mCPU:\e[0m \e[1;37m\$CPU_USAGE \e[1m| RAM:\e[0m \e[1;37m\$MEM_INFO \e[1m| Disk:\e[0m \e[1;37m\$DISK_INFO"
     echo -e "\e[2m-------------------------------------------------------------------------------\e[0m"
     echo -e "  \e[1mServer IP:\e[0m \e[33m\$SERVER_IP\e[0m  \e[1mManager:\e[0m \e[36mv\$VERSION\e[0m"
