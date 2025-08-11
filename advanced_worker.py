@@ -1,6 +1,7 @@
 import os
 import asyncio
 import logging
+from logging.handlers import TimedRotatingFileHandler
 import json
 import subprocess
 import requests
@@ -14,14 +15,23 @@ from config import (TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_PHONE,
                     GROUP_ID, ORDER_TOPIC_ID, MAJID_API_TOKEN, 
                     INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD, NESTCODE_API_KEY)
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# --- سیستم لاگ‌گیری حرفه‌ای با قابلیت چرخش روزانه ---
+log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(name)s - %(message)s')
+# لاگ‌ها در فایل worker.log ذخیره شده و هر شب ساعت ۱۲ بامداد آرشیو می‌شوند
+# backupCount=1 یعنی فقط لاگ ۱ روز گذشته نگهداری می‌شود
+log_handler = TimedRotatingFileHandler('worker.log', when='midnight', interval=1, backupCount=1)
+log_handler.setFormatter(log_formatter)
+# گرفتن لاگر اصلی برای ذخیره لاگ‌های کتابخانه‌های دیگر
+root_logger = logging.getLogger()
+root_logger.addHandler(log_handler)
+root_logger.setLevel(logging.INFO)
+# لاگر مخصوص خودمان برای پیام‌های اصلی
 logger = logging.getLogger(__name__)
-logging.getLogger("telethon").setLevel(logging.WARNING)
 
 class TelethonWorker:
     def __init__(self, api_id, api_hash, phone):
-        self.app = TelegramClient("telethon_session", api_id, api_hash); self.phone = phone
-        self.download_dir = "downloads"; os.makedirs(self.download_dir, exist_ok=True)
+        self.app = TelegramClient("telethon_session", api_id, api_hash)
+        self.phone = phone; self.download_dir = "downloads"; os.makedirs(self.download_dir, exist_ok=True)
         self.processed_ids = set(); self.start_time = datetime.now(timezone.utc); self.active_jobs = {}
         self.instaloader_client = instaloader.Instaloader(dirname_pattern=os.path.join(self.download_dir, "{target}"), save_metadata=False, compress_json=False, post_metadata_txt_pattern="")
         self.instagrapi_client = InstagrapiClient()
@@ -53,7 +63,6 @@ class TelethonWorker:
         
     def download_media(self, url, code, user_id):
         self.active_jobs[code] = {"user_id": user_id, "status": "Downloading..."}
-        
         if "instagram.com" in url:
             try:
                 logger.info(f"Attempt 1 (MajidAPI) for CODE: {code}")
@@ -68,7 +77,6 @@ class TelethonWorker:
                             for chunk in media_res.iter_content(chunk_size=8192): f.write(chunk)
                         self.active_jobs[code]["status"] = "Downloaded"; return output_path
             except Exception as e: logger.warning(f"MajidAPI failed for {code}: {e}")
-
             try:
                 logger.info(f"Attempt 2 (instagrapi) for CODE: {code}")
                 media_pk = self.instagrapi_client.media_pk_from_url(url); media_info = self.instagrapi_client.media_info(media_pk).dict()
@@ -80,7 +88,6 @@ class TelethonWorker:
                     os.rename(output_path, final_path)
                     self.active_jobs[code]["status"] = "Downloaded"; return final_path
             except Exception as e: logger.warning(f"instagrapi failed for {code}: {e}")
-            
             try:
                 logger.info(f"Attempt 3 (instaloader) for CODE: {code}")
                 shortcode = url.split('/')[-2]; post = instaloader.Post.from_shortcode(self.instaloader_client.context, shortcode)
@@ -94,7 +101,6 @@ class TelethonWorker:
                         os.rmdir(dl_folder)
                         self.active_jobs[code]["status"] = "Downloaded"; return final_path
             except Exception as e: logger.warning(f"Instaloader failed for {code}: {e}")
-            
             try:
                 logger.info(f"Attempt 4 (yt-dlp) for CODE: {code}")
                 output_path_yt = os.path.join(self.download_dir, f"{code} - %(title).30s.%(ext)s")
@@ -104,7 +110,6 @@ class TelethonWorker:
                     for f in os.listdir(self.download_dir):
                         if f.startswith(code): self.active_jobs[code]["status"] = "Downloaded"; return os.path.join(self.download_dir, f)
             except Exception as e: logger.warning(f"yt-dlp failed for {code}: {e}")
-
             try:
                 logger.info(f"Final Attempt (NestCode API) for CODE: {code}")
                 api_url = f"https://open.nestcode.org/apis-1/InstagramDownloader?url={url}&key={NESTCODE_API_KEY}"
@@ -131,14 +136,11 @@ class TelethonWorker:
                     for f in os.listdir(self.download_dir):
                         if f.startswith(code): return os.path.join(self.download_dir, f)
             except Exception as e: logger.error(f"yt-dlp failed for CODE {code}: {e}")
-        
         self.active_jobs[code]["status"] = "Download Failed"; return None
-
     async def upload_progress(self, sent_bytes, total_bytes, code):
         percentage = int(sent_bytes * 100 / total_bytes);
         if percentage % 10 == 0 or percentage == 100:
             if code in self.active_jobs: self.active_jobs[code]["status"] = f"Uploading: {percentage}%"
-
     async def process_job(self, message):
         if message.id in self.processed_ids: return
         self.processed_ids.add(message.id)
@@ -161,26 +163,20 @@ class TelethonWorker:
             except: self.active_jobs[code]["status"] = "Upload Failed"
             finally:
                 if os.path.exists(file_path): os.remove(file_path)
-
     async def display_dashboard(self):
         while True:
-            os.system('clear' if os.name == 'posix' else 'cls')
-            print("--- 🚀 Advanced Downloader Dashboard 🚀 ---")
+            # os.system('clear' if os.name == 'posix' else 'cls') # پاک‌سازی صفحه برای دیباگ غیرفعال شد
+            print("\n--- 🚀 Dashboard Update 🚀 ---")
             print(f"{'Job Code':<12} | {'User ID':<12} | {'Status':<20}")
             print("-" * 50)
-            if not self.active_jobs:
-                print("... Waiting for new jobs ...")
+            if not self.active_jobs: print("... Waiting for new jobs ...")
             else:
                 for code, data in list(self.active_jobs.items()):
-                    # این خط اصلاح شده است
                     print(f"{code:<12} | {data.get('user_id', 'N/A'):<12} | {data.get('status', 'N/A'):<20}")
                     if data.get('status') in ["Completed", "Download Failed", "Upload Failed"]:
-                        await asyncio.sleep(3)
-                        self.active_jobs.pop(code, None)
+                        await asyncio.sleep(5); self.active_jobs.pop(code, None)
             print("-" * 50)
-            print(f"Last Update: {datetime.now().strftime('%H:%M:%S')}")
-            await asyncio.sleep(1)
-
+            await asyncio.sleep(5)
     async def run(self):
         await self.app.start(phone=self.phone)
         me = await self.app.get_me()
@@ -204,4 +200,9 @@ async def main():
 
 if __name__ == "__main__":
     print("--- Rah andazi Ultimate Worker ---")
+    # اضافه کردن یک استریم هندلر برای نمایش لاگ‌ها در کنسول علاوه بر فایل
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(log_formatter)
+    root_logger.addHandler(console_handler)
+    
     asyncio.run(main())
