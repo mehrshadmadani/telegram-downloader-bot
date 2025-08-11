@@ -1,0 +1,77 @@
+# =================================================================
+#               Tanzimat-e Asli-e Robot Downloader
+# =================================================================
+
+# --- Token-e Robot-e Asli ---
+BOT_TOKEN = "YOUR_BOT_TOKEN"
+
+# --- Token-e Robot-e Uploader-e Backup ---
+BACKUP_BOT_TOKEN = "YOUR_BACKUP_BOT_TOKEN"
+
+# --- Tanzimat-e Grooh va Topic-ha ---
+GROUP_ID = 0  # Example: -100123456789
+ORDER_TOPIC_ID = 1
+LOG_TOPIC_ID = 1
+
+# --- Ettela'at-e Account-e Worker (Self-Account) ---
+TELEGRAM_API_ID = 12345678
+TELEGRAM_API_HASH = "YOUR_API_HASH"
+TELEGRAM_PHONE = "+1234567890"
+
+# --- Ettela'at-e Ettesal be Database PostgreSQL ---
+DB_NAME = "bot_db"
+DB_USER = "bot_user"
+DB_PASS = "YOUR_SECURE_PASSWORD"
+DB_HOST = "localhost"
+DB_PORT = "5432"
+
+# --- List-e ID-haye Adadi-e Admin-ha ---
+ADMIN_IDS = [
+    123456789,
+]
+
+# --- Kanal-haye Join-e Ejbari ---
+FORCED_JOIN_CHANNELS = [
+    '@YourChannel1',
+    '@YourChannel2',
+]
+
+# --- Ettela'at-e Login-e Instagram ---
+INSTAGRAM_USERNAME = "YOUR_INSTAGRAM_USERNAME"
+INSTAGRAM_PASSWORD = "YOUR_INSTAGRAM_PASSWORD"
+
+# --- Token-haye API-e Instagram ---
+MAJID_API_TOKEN = "YOUR_MAJID_API_TOKEN"
+NESTCODE_API_KEY = "YOUR_NESTCODE_API_KEY"
+
+
+# =================================================================
+#               Tanzimat-e Payam-ha va Dokme-ha
+# =================================================================
+
+# --- Dokme-ye Shishe-i Zir-e File-ha ---
+BUTTON_TEXT = "🤖 ربات فروش فیلترشکن پر سرعت 🤖"
+BUTTON_URL = "https://t.me/parsvip0_bot?start=2053431214"
+
+# --- Matn-e Footer Zir-e File-ha ---
+FOOTER_TEXT = """—————————————————
+🍭 Download by [CokaDownloader](https://t.me/CokaInstagram_Bot?start=0)
+• Get anything, anytime!
+• Made by @CoKaBots"""
+
+# --- Matn-haye Gabel-e Shakhsi-sazi (In matn-ha baraye karbar ersal mishavand) ---
+START_MESSAGE = "✅ خوش آمدید!\n\nمی‌توانید لینک خود را ارسال کنید."
+SUBMIT_MESSAGE = "✅ **درخواست ثبت شد!**\n\n🏷️ **کد پیگیری:** `{code}`"
+FAILURE_MESSAGE = "❌ متاسفانه در پردازش درخواست شما مشکلی پیش آمد.\n\nلطفاً دوباره تلاش کنید یا در صورت تکرار مشکل، به پشتیبانی پیام دهید: @parssuport"
+
+
+# =================================================================
+#               Tanzimat-e Amalkard-e Robot
+# =================================================================
+
+# --- Mahdoodiat-e Zamani baraye Karbaran-e Addi (be sanieh) ---
+USER_COOLDOWN_SECONDS = 40
+
+# --- Backup-e Khodkar-e Zaman-bandi Shode (be daghigheh) ---
+# Baraye gheir-fa'al kardan, in meghdar ra rooye 0 gharar dahid
+AUTO_BACKUP_INTERVAL_MINUTES = 15
