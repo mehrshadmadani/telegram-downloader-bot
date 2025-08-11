@@ -284,7 +284,9 @@ class AdvancedBot:
             subprocess.run(tar_cmd, shell=True, check=True, cwd=parent_dir, capture_output=True)
             logger.info(f"Successfully created archive: {archive_file}")
             backup_bot = Application.builder().token(BACKUP_BOT_TOKEN).build().bot
-            caption = f"✅ بکاپ ربات\n\n🗓 تاریخ: {timestamp}\n📦 فایل: `{archive_file}`"
+            safe_archive_name = archive_file.replace("_", "-")
+            safe_timestamp = timestamp.replace("_", "-")
+            caption = f"✅ بکاپ ربات\n\n🗓 تاریخ: {safe_timestamp}\n📦 فایل: `{safe_archive_name}`"
             with open(os.path.join(parent_dir, archive_file), 'rb') as backup_file_obj:
                 for admin_id in self.admin_ids:
                     try:
@@ -335,9 +337,10 @@ class AdvancedBot:
         
         if AUTO_BACKUP_INTERVAL_MINUTES > 0:
             job_queue = self.app.job_queue
-            interval_seconds = AUTO_BACKUP_INTERVAL_MINUTES * 60
-            job_queue.run_repeating(self.scheduled_backup_job, interval=interval_seconds, first=10)
-            logger.info(f"✅ Scheduled backup job is set to run every {AUTO_BACKUP_INTERVAL_MINUTES} minutes.")
+            if job_queue:
+                interval_seconds = AUTO_BACKUP_INTERVAL_MINUTES * 60
+                job_queue.run_repeating(self.scheduled_backup_job, interval=interval_seconds, first=10)
+                logger.info(f"✅ Scheduled backup job is set to run every {AUTO_BACKUP_INTERVAL_MINUTES} minutes.")
         else:
             logger.info("ℹ️ Auto backup is disabled.")
 
