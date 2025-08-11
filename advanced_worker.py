@@ -14,25 +14,18 @@ from telethon.tl.types import DocumentAttributeVideo
 from config import (TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_PHONE,
                     GROUP_ID, ORDER_TOPIC_ID)
 
-# --- سیستم لاگ‌گیری پیشرفته (هم در کنسول و هم در فایل) ---
+# --- سیستم لاگ‌گیری ---
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - [%(funcName)s] - %(message)s')
-
 if logger.hasHandlers():
     logger.handlers.clear()
-
-# هندلر برای چاپ در کنسول
 stream_handler = logging.StreamHandler()
 stream_handler.setFormatter(formatter)
 logger.addHandler(stream_handler)
-
-# هندلر برای نوشتن در فایل
 file_handler = logging.FileHandler('bot.log', encoding='utf-8')
 file_handler.setFormatter(formatter)
 logger.addHandler(file_handler)
-
-# جلوگیری از لاگ‌های اضافی کتابخانه‌ها
 logging.getLogger("telethon").setLevel(logging.WARNING)
 logging.getLogger("yt_dlp").setLevel(logging.WARNING)
 
@@ -47,7 +40,6 @@ class TelethonWorker:
         self.active_jobs = {}
 
     def yt_dlp_progress_hook(self, d, code):
-        """این تابع در حین دانلود توسط yt-dlp فراخوانی می‌شود."""
         if d['status'] == 'downloading':
             percent_str = d.get('_percent_str', '0.0%').strip()
             speed_str = d.get('_speed_str', 'N/A').strip()
@@ -58,32 +50,26 @@ class TelethonWorker:
                 self.active_jobs[code]["status"] = "Download Finished, Merging..."
 
     def download_media(self, url, code):
-        """تابع اصلی دانلود که حالا از progress hook پشتیبانی می‌کند."""
         try:
             logger.info(f"[{code}] Starting download process for URL: {url}")
             output_path = os.path.join(self.download_dir, f"{code}.%(ext)s")
-            
             ydl_opts = {
-                'outtmpl': output_path,
-                'cookiefile': 'cookies.txt',
+                'outtmpl': output_path, 'cookiefile': 'cookies.txt',
                 'ignoreerrors': True, 'no_warnings': True, 'quiet': True,
                 'format': 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best',
                 'merge_output_format': 'mp4',
                 'progress_hooks': [partial(self.yt_dlp_progress_hook, code=code)],
             }
-
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info_dict = ydl.extract_info(url, download=True)
             
-            logger.info(f"[{code}] Download process finished. Searching for file(s).")
             downloaded_files = [os.path.join(self.download_dir, f) for f in os.listdir(self.download_dir) if f.startswith(code)]
-            
             if not downloaded_files:
                 raise Exception("yt-dlp finished but no files were found.")
             
-            caption = info_dict.get('description', info_dict.get('title', '')) if info_dict else ""
+            # فقط عنوان را برای جلوگیری از خطای کپشن طولانی ارسال می‌کنیم
+            caption = info_dict.get('title', '') if info_dict else ""
             return downloaded_files, caption, "yt-dlp"
-
         except Exception as e:
             logger.error(f"[{code}] Error in download_media: {e}", exc_info=True)
             raise e
@@ -101,11 +87,10 @@ class TelethonWorker:
     async def upload_single_file(self, message, file_path, code, download_method, index, total_files, original_caption):
         try:
             if not os.path.exists(file_path):
-                raise Exception(f"File vanished before upload: {os.path.basename(file_path)}")
-
+                raise Exception(f"File vanished: {os.path.basename(file_path)}")
             file_size = os.path.getsize(file_path)
             self.active_jobs[code]["status"] = f"Uploading {index}/{total_files}..."
-            logger.info(f"[{code}] Uploading file {index}/{total_files}: {os.path.basename(file_path)} ({file_size / 1024**2:.2f} MB)")
+            logger.info(f"[{code}] Uploading {index}/{total_files}: {os.path.basename(file_path)} ({file_size / 1024**2:.2f} MB)")
             
             attributes = []
             caption_to_group = f"✅ Uploaded ({index}/{total_files})\nCODE: {code}\nSIZE: {file_size}\nMETHOD: {download_method}"
@@ -123,8 +108,7 @@ class TelethonWorker:
         except Exception as e:
             raise e
         finally:
-            if os.path.exists(file_path):
-                os.remove(file_path)
+            if os.path.exists(file_path): os.remove(file_path)
 
     def update_upload_status(self, sent, total, code, index, total_files):
         if code in self.active_jobs:
@@ -144,15 +128,10 @@ class TelethonWorker:
             
             file_paths, caption_text, method = await asyncio.to_thread(self.download_media, url, code)
             
-            if code in self.active_jobs:
-                self.active_jobs[code]["status"] = "Processing..."
-            
+            if code in self.active_jobs: self.active_jobs[code]["status"] = "Processing..."
             for i, path in enumerate(file_paths):
                 await self.upload_single_file(message, path, code, method, i + 1, len(file_paths), caption_text)
-            
-            if code in self.active_jobs:
-                self.active_jobs[code]["status"] = "Completed"
-
+            if code in self.active_jobs: self.active_jobs[code]["status"] = "Completed"
         except Exception as e:
             error_short = str(e).strip().split('\n')[0]
             if "CODE:" in error_short: error_short = "Could not parse job message"
@@ -163,10 +142,9 @@ class TelethonWorker:
     async def display_dashboard(self):
         while True:
             os.system('clear' if os.name == 'posix' else 'cls')
-            print("--- 🚀 Advanced Downloader Dashboard (Final v3) 🚀 ---")
+            print("--- 🚀 Advanced Downloader Dashboard (Final) 🚀 ---")
             print(f"{'Job Code':<12} | {'User ID':<12} | {'Status':<50}")
             print("-" * 80)
-            
             if not self.active_jobs:
                 print("... Waiting for new jobs ...")
             else:
@@ -177,23 +155,20 @@ class TelethonWorker:
                     if data.get('status') in ["Completed", "Failed"]:
                         await asyncio.sleep(10)
                         self.active_jobs.pop(code, None)
-
             print("-" * 80)
-            print(f"Last Update: {datetime.now().strftime('%H:%M:%S')} | To see detailed logs, run: tail -f bot.log")
+            print(f"Last Update: {datetime.now().strftime('%H:%M:%S')} | Logs: tail -f bot.log")
             await asyncio.sleep(1)
 
     async def run(self):
         try:
             await self.app.start(phone=self.phone)
             me = await self.app.get_me()
-            logger.info(f"Worker (Final v3) successfully logged in as {me.first_name}")
+            logger.info(f"Worker (Final) successfully logged in as {me.first_name}")
         except Exception as e:
             logger.critical(f"Could not start the worker. Error: {e}")
             return
-
         dashboard_task = asyncio.create_task(self.display_dashboard())
         logger.info(f"Worker started listening for new jobs...")
-
         while True:
             try:
                 async for message in self.app.iter_messages(GROUP_ID, reply_to=ORDER_TOPIC_ID, limit=10):
@@ -207,6 +182,6 @@ class TelethonWorker:
                 await asyncio.sleep(30)
 
 if __name__ == "__main__":
-    logger.info("--- Starting Final Worker (v3) ---")
+    logger.info("--- Starting Final Worker ---")
     worker = TelethonWorker(TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_PHONE)
     asyncio.run(worker.run())
