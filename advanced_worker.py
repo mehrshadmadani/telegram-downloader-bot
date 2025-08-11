@@ -9,117 +9,156 @@ from datetime import datetime, timezone
 import yt_dlp
 from telethon import TelegramClient
 from telethon.tl.types import DocumentAttributeVideo
+import instaloader
 from instagrapi import Client as InstagrapiClient
 from config import (TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_PHONE, 
                     GROUP_ID, ORDER_TOPIC_ID, MAJID_API_TOKEN, 
-                    INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
+                    INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD, NESTCODE_API_KEY)
 
 # --- سیستم لاگ‌گیری ---
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(name)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 logging.getLogger("telethon").setLevel(logging.WARNING)
 
 class TelethonWorker:
     def __init__(self, api_id, api_hash, phone):
-        self.app = TelegramClient("telethon_session", api_id, api_hash)
-        self.phone = phone
-        self.download_dir = "downloads"
-        os.makedirs(self.download_dir, exist_ok=True)
-        self.processed_ids = set()
-        self.start_time = datetime.now(timezone.utc)
-        self.active_jobs = {}
+        self.app = TelegramClient("telethon_session", api_id, api_hash); self.phone = phone
+        self.download_dir = "downloads"; os.makedirs(self.download_dir, exist_ok=True)
+        self.processed_ids = set(); self.start_time = datetime.now(timezone.utc); self.active_jobs = {}
+        self.instaloader_client = instaloader.Instaloader(dirname_pattern=os.path.join(self.download_dir, "{target}"), save_metadata=False, compress_json=False, post_metadata_txt_pattern="")
         self.instagrapi_client = InstagrapiClient()
-        session_file = "insta_session.json"
         try:
-            if os.path.exists(session_file):
-                self.instagrapi_client.load_settings(session_file)
-                self.instagrapi_client.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
-            else:
-                self.instagrapi_client.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
-                self.instagrapi_client.dump_settings(session_file)
-            logger.info("Instagram session via instagrapi loaded/created successfully.")
+            logger.info("Loading Instagram sessions...")
+            self.instaloader_client.load_session_from_file(INSTAGRAM_USERNAME)
+            self.instagrapi_client.load_settings("insta_session.json")
+            self.instagrapi_client.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
+            logger.info("All Instagram sessions loaded successfully.")
         except Exception as e:
-            logger.error(f"FATAL: Failed to login to Instagram with instagrapi: {e}")
+            logger.error(f"Session loading failed, attempting fresh login: {e}")
+            self.setup_instagram_sessions()
+
+    def setup_instagram_sessions(self):
+        try:
+            logger.info("Attempting fresh login for instagrapi...")
+            self.instagrapi_client.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
+            self.instagrapi_client.dump_settings("insta_session.json")
+            logger.info("instagrapi login successful and session saved.")
+        except Exception as e:
+            logger.error(f"FATAL: instagrapi login failed: {e}")
 
     def get_video_metadata(self, file_path):
         try:
             command = ['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height,duration', '-of', 'json', file_path]
-            result = subprocess.run(command, capture_output=True, text=True, check=True, timeout=30)
-            data = json.loads(result.stdout)['streams'][0]
+            result = subprocess.run(command, capture_output=True, text=True, check=True, timeout=30); data = json.loads(result.stdout)['streams'][0]
             return {'duration': int(float(data['duration'])), 'width': int(data['width']), 'height': int(data['height'])}
         except: return None
         
-    def _download_with_yt_dlp(self, url, code, is_fallback=False):
-        """ تابع عمومی برای دانلود با yt-dlp """
-        platform = "yt-dlp (Fallback)" if is_fallback else "yt-dlp"
-        logger.info(f"Attempting {platform} for CODE: {code}")
-        output_path = os.path.join(self.download_dir, f"{code} - %(title).30s.%(ext)s")
-        base_opts = {'outtmpl': output_path, 'cookiefile': 'cookies.txt', 'ignoreerrors': True, 'quiet': True, 'no_warnings': True, 'socket_timeout': 1800}
-        
-        if "soundcloud.com" in url or "spotify" in url:
-            ydl_opts = {'format': 'bestaudio/best', 'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3'}]}
-        elif "instagram.com" in url:
-            ydl_opts = {'format': 'best'}
-        else: # YouTube and others
-            ydl_opts = {'format': 'bestvideo[height<=720]+bestaudio/best[height<=720]/best', 'merge_output_format': 'mp4'}
-        
-        ydl_opts.update(base_opts)
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info_dict = ydl.extract_info(url, download=True)
-                caption = info_dict.get('description', '')
-                downloaded_files = []
-                for f in os.listdir(self.download_dir):
-                    if f.startswith(code):
-                        downloaded_files.append(os.path.join(self.download_dir, f))
-                if downloaded_files:
-                    return (downloaded_files, caption, "yt-dlp")
-        except Exception as e:
-            logger.error(f"{platform} failed for CODE {code}: {e}")
-        return ([], None, None)
+    def _download_from_url(self, url, code, index=0):
+        media_res = requests.get(url, stream=True, timeout=1800)
+        media_res.raise_for_status()
+        content_type = media_res.headers.get('content-type', '')
+        ext = ".jpg" if "image" in content_type else ".mp4"
+        output_path = os.path.join(self.download_dir, f"{code}_{index}{ext}")
+        with open(output_path, 'wb') as f:
+            for chunk in media_res.iter_content(chunk_size=8192): f.write(chunk)
+        return output_path
 
     def download_media(self, url, code, user_id):
         self.active_jobs[code] = {"user_id": user_id, "status": "Downloading..."}
         
         if "instagram.com" in url:
-            # 1. تلاش با instagrapi
-            try:
-                logger.info(f"Attempt 1 (instagrapi) for CODE: {code}")
-                media_pk = self.instagrapi_client.media_pk_from_url(url)
-                media_info = self.instagrapi_client.media_info(media_pk).dict()
-                caption = media_info.get("caption_text", "")
-                resources = media_info.get("resources", [])
-                if not resources: resources = [media_info]
-                
-                downloaded_files = []
-                for i, res in enumerate(resources):
-                    dl_path = None
-                    if res.get("media_type") == 2: dl_path = self.instagrapi_client.video_download(res['pk'], self.download_dir)
-                    elif res.get("media_type") == 1: dl_path = self.instagrapi_client.photo_download(res['pk'], self.download_dir)
-                    if dl_path:
-                        final_path = os.path.join(self.download_dir, f"{code}_{i}{os.path.splitext(dl_path)[1]}")
-                        os.rename(dl_path, final_path); downloaded_files.append(final_path)
-                
-                if downloaded_files:
-                    self.active_jobs[code]["status"] = "Downloaded"; return (downloaded_files, caption, "instagrapi")
-            except Exception as e:
-                logger.warning(f"instagrapi failed: {e}")
-            
-            # 2. تلاش با yt-dlp به عنوان پشتیبان
-            file_paths, caption, method = self._download_with_yt_dlp(url, code, is_fallback=True)
-            if file_paths:
-                self.active_jobs[code]["status"] = "Downloaded"; return (file_paths, caption, method)
+            # --- زنجیره دانلود اینستاگرام ---
+            methods = [
+                self._try_instagrapi, 
+                self._try_majidapi, 
+                self._try_nestcode_api,
+                self._try_yt_dlp_insta
+            ]
+            for method in methods:
+                try:
+                    file_paths, caption, method_name = method(url, code)
+                    if file_paths:
+                        self.active_jobs[code]["status"] = "Downloaded"
+                        return (file_paths, caption, method_name)
+                except Exception as e:
+                    logger.warning(f"Method {method.__name__} failed for {code}: {e}")
         else:
-            # دانلود برای سایر پلتفرم‌ها
-            file_paths, caption, method = self._download_with_yt_dlp(url, code)
-            if file_paths:
-                self.active_jobs[code]["status"] = "Downloaded"; return (file_paths, caption, method)
-        
+            # --- دانلود برای پلتفرم‌های دیگر ---
+            try:
+                file_paths, caption, method = self._download_with_yt_dlp(url, code)
+                if file_paths:
+                    self.active_jobs[code]["status"] = "Downloaded"
+                    return (file_paths, caption, method)
+            except Exception as e:
+                logger.error(f"yt-dlp failed for CODE {code}: {e}")
+
         self.active_jobs[code]["status"] = "Download Failed"; return ([], None, None)
 
+    def _try_instagrapi(self, url, code):
+        logger.info(f"Attempt 1 (instagrapi) for CODE: {code}")
+        media_pk = self.instagrapi_client.media_pk_from_url(url); media_info = self.instagrapi_client.media_info(media_pk).dict()
+        caption = media_info.get("caption_text", ""); resources = media_info.get("resources", [])
+        if not resources: resources = [media_info]
+        downloaded_files = []
+        for i, res in enumerate(resources):
+            dl_path = None
+            if res.get("media_type") == 2: dl_path = self.instagrapi_client.video_download(res['pk'], self.download_dir)
+            elif res.get("media_type") == 1: dl_path = self.instagrapi_client.photo_download(res['pk'], self.download_dir)
+            if dl_path:
+                final_path = os.path.join(self.download_dir, f"{code}_{i}{os.path.splitext(dl_path)[1]}")
+                os.rename(dl_path, final_path); downloaded_files.append(final_path)
+        return (downloaded_files, caption, "instagrapi")
+    
+    def _try_majidapi(self, url, code):
+        logger.info(f"Attempt 2 (MajidAPI) for CODE: {code}")
+        api_url = f"https://api.majidapi.ir/instagram/download?url={url}&out=url&token={MAJID_API_TOKEN}"
+        data = requests.get(api_url, timeout=20).json()
+        if data.get("status") == 200:
+            result = data.get("result", {}); caption = result.get("caption", "")
+            media_urls = result.get("carousel") or result.get("images") or ([result.get("video")] if result.get("video") else [])
+            downloaded_files = [self._download_from_url(media_url, code, i) for i, media_url in enumerate(media_urls)]
+            if downloaded_files: return (downloaded_files, caption, "MajidAPI")
+        return ([], None, None)
+
+    def _try_nestcode_api(self, url, code):
+        logger.info(f"Attempt 3 (NestCode API) for CODE: {code}")
+        api_url = f"https://open.nestcode.org/apis-1/InstagramDownloader?url={url}&key={NESTCODE_API_KEY}"
+        data = requests.get(api_url, timeout=30).json()
+        if data.get("status") == "success":
+            result = data.get("data", {}); caption = result.get("caption", "")
+            media_urls = result.get("medias", [])
+            downloaded_files = [self._download_from_url(media_url, code, i) for i, media_url in enumerate(media_urls)]
+            if downloaded_files: return (downloaded_files, caption, "NestCode API")
+        return ([], None, None)
+        
+    def _try_yt_dlp_insta(self, url, code):
+        logger.info(f"Attempt 4 (yt-dlp) for CODE: {code}")
+        output_path_yt = os.path.join(self.download_dir, f"{code} - %(title).30s.%(ext)s")
+        ydl_opts = {'outtmpl': output_path_yt, 'cookiefile': 'cookies.txt', 'format': 'best', 'ignoreerrors': True, 'quiet': True, 'no_warnings': True, 'socket_timeout': 1800}
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info_dict = ydl.extract_info(url, download=True)
+            caption = info_dict.get('description', '')
+            downloaded_files = [os.path.join(self.download_dir, f) for f in os.listdir(self.download_dir) if f.startswith(code)]
+            if downloaded_files: return (downloaded_files, caption, "yt-dlp")
+        return ([], None, None)
+
+    def _download_with_yt_dlp(self, url, code):
+        logger.info(f"Using yt-dlp for {url.split('/')[2]} CODE: {code}")
+        output_path = os.path.join(self.download_dir, f"{code} - %(title).30s.%(ext)s")
+        base_opts = {'outtmpl': output_path, 'cookiefile': 'cookies.txt', 'ignoreerrors': True, 'quiet': True, 'no_warnings': True, 'socket_timeout': 1800}
+        if "soundcloud" in url or "spotify" in url: ydl_opts = {'format': 'bestaudio/best', 'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3'}]}
+        else: ydl_opts = {'format': 'bestvideo[height<=720]+bestaudio/best[height<=720]/best', 'merge_output_format': 'mp4'}
+        ydl_opts.update(base_opts)
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info_dict = ydl.extract_info(url, download=True)
+            caption = info_dict.get('description', '')
+            downloaded_files = [os.path.join(self.download_dir, f) for f in os.listdir(self.download_dir) if f.startswith(code)]
+            if downloaded_files: return (downloaded_files, caption, "yt-dlp")
+        return ([], None, None)
+        
     # ... (بقیه توابع کلاس بدون تغییر) ...
     async def upload_progress(self, sent_bytes, total_bytes, code, index, total):
-        percentage = int(sent_bytes * 100 / total_bytes)
+        percentage = int(sent_bytes * 100 / total_bytes);
         if percentage % 20 == 0 or percentage == 100:
             if code in self.active_jobs: self.active_jobs[code]["status"] = f"Uploading {index}/{total}: {percentage}%"
     async def process_job(self, message):
@@ -156,7 +195,7 @@ class TelethonWorker:
         except Exception as e: logger.error(f"Upload failed for {file_path}: {e}")
         finally:
             if os.path.exists(file_path): os.remove(file_path)
-    async def display_dashboard(self,):
+    async def display_dashboard(self):
         while True:
             os.system('clear' if os.name == 'posix' else 'cls'); print("--- 🚀 Advanced Downloader Dashboard 🚀 ---")
             print(f"{'Job Code':<12} | {'User ID':<12} | {'Status':<25}"); print("-" * 55)
@@ -169,7 +208,7 @@ class TelethonWorker:
     async def run(self):
         await self.app.start(phone=self.phone)
         me = await self.app.get_me()
-        logger.info(f"Worker (Future-Proof) ba movaffaghiat be onvane {me.first_name} vared shod.")
+        logger.info(f"Worker (Ultimate Fallback) ba movaffaghiat be onvane {me.first_name} vared shod.")
         target_chat_id = GROUP_ID; target_topic_id = ORDER_TOPIC_ID
         try: entity = await self.app.get_entity(target_chat_id)
         except Exception as e: logger.critical(f"Nemitavan be Group ID dastresi peyda kard. Khata: {e}"); return
