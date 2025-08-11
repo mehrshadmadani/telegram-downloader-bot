@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # =============================================================
-#         Coka Bot Manager - Universal Installer v25.0 (Hardcoded URLs)
+#         Coka Bot Manager - Universal Smart Installer v26.0 (Full Management)
 # =============================================================
 
 COKA_SCRIPT_PATH="/usr/local/bin/coka"
@@ -19,10 +19,18 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
+DEFAULT_BOT_DIR="/root/telegram-downloader-bot"
+DEFAULT_MANAGER_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/install_coka.sh"
+
 if [ -f "$COKA_SCRIPT_PATH" ]; then
     print_warning "'coka' command is already installed."
     LATEST_VERSION=$(curl -sL "$VERSION_URL" | head -n 1)
     if [ -z "$LATEST_VERSION" ]; then LATEST_VERSION="N/A"; fi
+    
+    EXISTING_BOT_DIR=$(grep -oP 'BOT_DIR="\K[^"]+' "$COKA_SCRIPT_PATH" || echo "$DEFAULT_BOT_DIR")
+    EXISTING_MANAGER_URL=$(grep -oP 'MANAGER_SCRIPT_URL="\K[^"]+' "$COKA_SCRIPT_PATH" || echo "$DEFAULT_MANAGER_URL")
+    DEFAULT_BOT_DIR=$EXISTING_BOT_DIR
+    DEFAULT_MANAGER_URL=$EXISTING_MANAGER_URL
     
     read -p "Do you want to force overwrite it with the latest version from GitHub (v$LATEST_VERSION)? (y/n): " OVERWRITE_CONFIRM
     if [[ "$OVERWRITE_CONFIRM" != "y" ]]; then
@@ -31,8 +39,15 @@ if [ -f "$COKA_SCRIPT_PATH" ]; then
     fi
 else
     LATEST_VERSION=$(curl -sL "$VERSION_URL" | head -n 1)
-    if [ -z "$LATEST_VERSION" ]; then LATEST_VERSION="25.0 (Hardcoded)"; fi
+    if [ -z "$LATEST_VERSION" ]; then LATEST_VERSION="26.0 (Full Management)"; fi
 fi
+
+# --- Interactive Setup ---
+print_info "Configuring the 'coka' management command..."
+read -p "Enter the full path to your bot directory [Default: $DEFAULT_BOT_DIR]: " BOT_DIR_INPUT
+BOT_DIR=${BOT_DIR_INPUT:-$DEFAULT_BOT_DIR}
+read -p "Enter the raw GitHub URL for this installer script itself [Default: $DEFAULT_MANAGER_URL]: " MANAGER_URL_INPUT
+MANAGER_URL=${MANAGER_URL_INPUT:-$DEFAULT_MANAGER_URL}
 
 # --- Installation ---
 print_info "Installing required utilities (screen, curl, bc)..."
@@ -44,17 +59,13 @@ print_info "Creating the 'coka' management script..."
 cat > "$COKA_SCRIPT_PATH" << EOF
 #!/bin/bash
 VERSION="$LATEST_VERSION"
-
-# --- Tanzimat (Settings) ---
-BOT_DIR="/root/telegram-downloader-bot"
-WORKER_SCREEN_NAME="worker_session"
-MAIN_BOT_SCREEN_NAME="main_bot_session"
-
-# --- Link-haye Sabet baraye Update (Hardcoded URLs) ---
-MANAGER_SCRIPT_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/install_coka.sh"
+BOT_DIR="$BOT_DIR"
+MANAGER_SCRIPT_URL="$MANAGER_URL"
 WORKER_SCRIPT_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/advanced_worker.py"
 MAIN_BOT_SCRIPT_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/main_bot.py"
-
+REQS_SCRIPT_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/requirements.txt"
+WORKER_SCREEN_NAME="worker_session"
+MAIN_BOT_SCREEN_NAME="main_bot_session"
 
 # --- Functions ---
 print_info() { echo -e "\e[34mINFO: \$1\e[0m"; }
@@ -122,6 +133,33 @@ update_manager() {
         exec coka
     else
         print_error "Failed to run update script.";
+    fi
+}
+
+setup_requirements_cron() {
+    CRON_FILE="/etc/cron.d/coka_requirements_update"
+    CRON_COMMAND="cd \$BOT_DIR && source venv/bin/activate && pip install -r requirements.txt --upgrade"
+    
+    if [ -f "\$CRON_FILE" ]; then
+        print_warning "Cron job already exists. Removing it first."
+        rm -f "\$CRON_FILE"
+    fi
+    
+    print_info "Setting up a weekly cron job to update Python libraries..."
+    echo "0 3 * * 0 root \$CRON_COMMAND >> \$BOT_DIR/cron.log 2>&1" > "\$CRON_FILE"
+    
+    print_success "Cron job created successfully."
+    print_info "Libraries will be updated automatically every Sunday at 3 AM."
+    print_info "Log of updates will be saved in: \$BOT_DIR/cron.log"
+}
+
+remove_requirements_cron() {
+    CRON_FILE="/etc/cron.d/coka_requirements_update"
+    if [ -f "\$CRON_FILE" ]; then
+        rm -f "\$CRON_FILE"
+        print_success "Cron job for requirements update has been removed."
+    else
+        print_error "No active cron job found to remove."
     fi
 }
 
@@ -194,31 +232,55 @@ main_bot_menu() {
     done
 }
 
+requirements_menu() {
+    while true; do
+        show_panel_and_menu
+        echo "  Requirements Manager Menu:"
+        echo "  [1] Update requirements.txt from GitHub"
+        echo "  [2] Setup Weekly Auto-Update (Cron Job)"
+        echo "  [3] Remove Auto-Update Cron Job"
+        echo "  [0] Back to Main Menu"
+        echo -e "\e[2m----------------------------------------------------------\e[0m"
+        read -p "  Enter your choice: " choice
+        case \$choice in
+            1) update_script "requirements" "\$REQS_SCRIPT_URL" "\$BOT_DIR/requirements.txt" ;;
+            2) setup_requirements_cron ;;
+            3) remove_requirements_cron ;;
+            0) return ;;
+            *) print_error "Invalid option." ;;
+        esac
+        echo; read -p "Press [Enter] to continue..."
+    done
+}
+
 main_menu() {
     while true; do
         show_panel_and_menu
         echo "  Main Menu:"
         echo "  [1] Worker Manager"
         echo "  [2] Main Bot Manager"
-        echo "  [3] Update This Manager (coka)"
+        echo "  [3] Requirements Manager"
+        echo "  [4] Update This Manager (coka)"
         echo "  [0] Quit"
         echo -e "\e[2m-------------------------------------------------------------------------------\e[0m"
         read -p "  Enter your choice: " choice
         case \$choice in
             1) worker_menu ;;
             2) main_bot_menu ;;
-            3) update_manager; ;;
+            3) requirements_menu ;;
+            4) update_manager; ;;
             0) echo "Exiting."; clear; exit 0 ;;
             *) print_error "Invalid option." ;;
         esac
     done
 }
 
+# --- Main Script ---
 cd "\$BOT_DIR" || { print_error "Directory not found: \$BOT_DIR"; exit 1; }
 main_menu
 EOF
 
-# --- Final Step: Make it executable ---
+# --- Final Step ---
 chmod +x "$COKA_SCRIPT_PATH"
 print_success "Management script 'coka' (v$LATEST_VERSION) installed successfully!"
 echo
