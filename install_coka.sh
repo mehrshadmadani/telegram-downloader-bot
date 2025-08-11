@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # =============================================================
-#         Coka Bot Manager - Universal Smart Installer v29.0 (Final Stable)
+#         Coka Bot Manager - Universal Smart Installer v30.0 (Final)
 # =============================================================
 
 COKA_SCRIPT_PATH="/usr/local/bin/coka"
@@ -24,15 +24,8 @@ DEFAULT_MANAGER_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-d
 
 if [ -f "$COKA_SCRIPT_PATH" ]; then
     print_warning "'coka' command is already installed."
-    
-    print_info "Fetching latest version info from GitHub..."
     LATEST_VERSION=$(curl -sL "$VERSION_URL" | head -n 1)
     if [ -z "$LATEST_VERSION" ]; then LATEST_VERSION="N/A"; fi
-    
-    EXISTING_BOT_DIR=$(grep -oP 'BOT_DIR="\K[^"]+' "$COKA_SCRIPT_PATH" || echo "$DEFAULT_BOT_DIR")
-    EXISTING_MANAGER_URL=$(grep -oP 'MANAGER_SCRIPT_URL="\K[^"]+' "$COKA_SCRIPT_PATH" || echo "$DEFAULT_MANAGER_URL")
-    DEFAULT_BOT_DIR=$EXISTING_BOT_DIR
-    DEFAULT_MANAGER_URL=$EXISTING_MANAGER_URL
     
     read -p "Do you want to force overwrite it with the latest version from GitHub (v$LATEST_VERSION)? (y/n): " OVERWRITE_CONFIRM
     if [[ "$OVERWRITE_CONFIRM" != "y" ]]; then
@@ -41,15 +34,8 @@ if [ -f "$COKA_SCRIPT_PATH" ]; then
     fi
 else
     LATEST_VERSION=$(curl -sL "$VERSION_URL" | head -n 1)
-    if [ -z "$LATEST_VERSION" ]; then LATEST_VERSION="29.0 (Final Stable)"; fi
+    if [ -z "$LATEST_VERSION" ]; then LATEST_VERSION="30.0 (Final)"; fi
 fi
-
-# --- Interactive Setup ---
-print_info "Configuring the 'coka' management command..."
-read -p "Enter the full path to your bot directory [Default: $DEFAULT_BOT_DIR]: " BOT_DIR_INPUT
-BOT_DIR=${BOT_DIR_INPUT:-$DEFAULT_BOT_DIR}
-read -p "Enter the raw GitHub URL for this installer script itself [Default: $DEFAULT_MANAGER_URL]: " MANAGER_URL_INPUT
-MANAGER_URL=${MANAGER_URL_INPUT:-$DEFAULT_MANAGER_URL}
 
 # --- Installation ---
 print_info "Installing required utilities (screen, curl, bc)..."
@@ -61,14 +47,16 @@ print_info "Creating the 'coka' management script..."
 cat > "$COKA_SCRIPT_PATH" << EOF
 #!/bin/bash
 VERSION="$LATEST_VERSION"
-BOT_DIR="$BOT_DIR"
-MANAGER_SCRIPT_URL="$MANAGER_URL"
-REQS_SCRIPT_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/requirements.txt"
-WORKER_SCRIPT_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/advanced_worker.py"
-MAIN_BOT_SCRIPT_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/main_bot.py"
-VERSION_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/version.txt"
+BOT_DIR="/root/telegram-downloader-bot"
 WORKER_SCREEN_NAME="worker_session"
 MAIN_BOT_SCREEN_NAME="main_bot_session"
+
+# --- Link-haye Sabet baraye Update ---
+MANAGER_SCRIPT_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/install_coka.sh"
+WORKER_SCRIPT_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/advanced_worker.py"
+MAIN_BOT_SCRIPT_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/main_bot.py"
+REQS_SCRIPT_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/requirements.txt"
+VERSION_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/version.txt"
 
 # --- Functions ---
 print_info() { echo -e "\e[34mINFO: \$1\e[0m"; }
@@ -102,14 +90,12 @@ update_script() {
     local service_name=\$1
     local script_url=\$2
     local file_path=\$3
-    
     print_warning "This will overwrite '\$file_path' with the latest version from GitHub."
     read -p "Are you sure? (y/n): " confirm
     if [[ "\$confirm" != "y" ]]; then
         print_info "Update for \$service_name cancelled."
         return
     fi
-    
     print_info "Updating \$service_name script..."
     curl -s -L "\$script_url" -o "\$file_path"
     if [ \$? -eq 0 ]; then
@@ -129,19 +115,16 @@ update_manager() {
         print_error "Could not fetch latest version info."
         return
     fi
-    
     if [ "\$VERSION" == "\$LATEST_VERSION" ]; then
         print_success "You are already on the latest version (v\$VERSION)."
         return
     fi
-
     print_warning "A new version is available: v\$LATEST_VERSION"
     read -p "Do you want to update from v\$VERSION to v\$LATEST_VERSION? (y/n): " UPDATE_CONFIRM
     if [[ "\$UPDATE_CONFIRM" != "y" ]]; then
         print_info "Update cancelled."
         return
     fi
-
     print_info "Updating 'coka' manager script itself..."
     curl -s -L "\$MANAGER_SCRIPT_URL" | sudo bash
     if [ \$? -eq 0 ]; then
@@ -157,17 +140,11 @@ update_manager() {
 setup_requirements_cron() {
     CRON_FILE="/etc/cron.d/coka_requirements_update"
     CRON_COMMAND="cd \$BOT_DIR && source venv/bin/activate && pip install -r requirements.txt --upgrade"
-    
-    if [ -f "\$CRON_FILE" ]; then
-        print_warning "Cron job already exists. It will be overwritten."
-    fi
-    
+    if [ -f "\$CRON_FILE" ]; then print_warning "Cron job already exists. It will be overwritten."; fi
     print_info "Setting up a weekly cron job to update Python libraries..."
     echo "0 3 * * 0 root \$CRON_COMMAND >> \$BOT_DIR/cron.log 2>&1" | sudo tee "\$CRON_FILE" > /dev/null
-    
     print_success "Cron job created successfully."
     print_info "Libraries will be updated automatically every Sunday at 3 AM."
-    print_info "Log of updates will be saved in: \$BOT_DIR/cron.log"
 }
 
 remove_requirements_cron() {
@@ -187,12 +164,10 @@ clear_and_prepare_cookies() {
         print_info "Operation cancelled."
         return
     fi
-
     print_info "Clearing cookies.txt and preparing for new content..."
     echo "# Netscape HTTP Cookie File" > "\$BOT_DIR/cookies.txt"
     echo "# Paste your new cookies below this line." >> "\$BOT_DIR/cookies.txt"
     print_success "cookies.txt is now clean and ready."
-    print_warning "You can now edit it manually with option [3]."
 }
 
 # --- UI Functions ---
@@ -276,12 +251,7 @@ requirements_menu() {
         echo -e "\e[2m----------------------------------------------------------\e[0m"
         read -p "  Enter your choice: " choice
         case \$choice in
-            1)
-                print_info "Content of requirements.txt:"
-                echo "---------------------------------"
-                cat -n "\$BOT_DIR/requirements.txt"
-                echo "---------------------------------"
-                ;;
+            1) print_info "Content of requirements.txt:"; echo "---------------------------------"; cat -n "\$BOT_DIR/requirements.txt"; echo "---------------------------------";;
             2) update_script "requirements" "\$REQS_SCRIPT_URL" "\$BOT_DIR/requirements.txt" ;;
             3) setup_requirements_cron ;;
             4) remove_requirements_cron ;;
@@ -303,12 +273,7 @@ cookies_menu() {
         echo -e "\e[2m----------------------------------------------------------\e[0m"
         read -p "  Enter your choice: " choice
         case \$choice in
-            1)
-                print_info "Content of cookies.txt:"
-                echo "---------------------------------"
-                cat -n "\$BOT_DIR/cookies.txt"
-                echo "---------------------------------"
-                ;;
+            1) print_info "Content of cookies.txt:"; echo "---------------------------------"; cat -n "\$BOT_DIR/cookies.txt"; echo "---------------------------------";;
             2) clear_and_prepare_cookies ;;
             3) nano "\$BOT_DIR/cookies.txt" ;;
             0) return ;;
