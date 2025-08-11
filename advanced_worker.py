@@ -34,10 +34,8 @@ class TelethonWorker:
     def download_media(self, url, code, user_id):
         self.active_jobs[code] = {"user_id": user_id, "status": "Downloading..."}
         
-        # --- منطق جدید و هوشمند برای اینستاگرام ---
         if "instagram.com" in url:
             try:
-                # تشخیص نوع لینک (پست یا پروفایل)
                 if "/p/" in url or "/reel/" in url or "/stories/" in url:
                     api_url = f"https://api.majidapi.ir/instagram/download?url={url}&out=url&token=gmtbknlkxekej1p:KvnPibe8c0xzbz5U04Fj"
                 else:
@@ -51,29 +49,26 @@ class TelethonWorker:
                 media_url = None
                 if data.get("status") == 200:
                     result = data.get("result", {})
-                    # چک کردن برای ویدیو، عکس، یا اولین آیتم در لیست (برای استوری/اسلایدشو)
+                    # --- اصلاح کلیدی: استفاده از "image" به جای "pic" ---
                     if result.get("video"):
                         media_url = result["video"]
-                    elif result.get("pic"):
-                        media_url = result["pic"]
+                    elif result.get("image"):
+                        media_url = result["image"]
                     elif isinstance(result, list) and result and result[0].get("media"):
                          media_url = result[0]["media"]
 
                 if media_url:
-                    # تعیین پسوند فایل بر اساس لینک
-                    file_extension = ".jpg" if ".jpg" in media_url else ".mp4"
+                    file_extension = ".jpg" if ".jpg" in media_url.split('?')[0] else ".mp4"
                     output_path = os.path.join(self.download_dir, f"{code}{file_extension}")
                     
-                    # دانلود مستقیم فایل از لینک دریافتی
                     media_response = requests.get(media_url, stream=True)
                     media_response.raise_for_status()
                     with open(output_path, 'wb') as f:
-                        for chunk in media_response.iter_content(chunk_size=8192):
-                            f.write(chunk)
+                        for chunk in media_response.iter_content(chunk_size=8192): f.write(chunk)
                     self.active_jobs[code]["status"] = "Downloaded"
                     return output_path
                 else:
-                    raise Exception(f"API Error: Media URL not found in response {data}")
+                    raise Exception(f"API Error: Media URL not found in response")
 
             except Exception as e:
                 logger.error(f"Khata dar download Instagram (API) baraye CODE {code}: {e}")
@@ -82,13 +77,12 @@ class TelethonWorker:
         
         # --- منطق قبلی برای بقیه پلتفرم‌ها ---
         output_path = os.path.join(self.download_dir, f"{code} - %(title).30s.%(ext)s")
-        # ... (بقیه کد دانلود برای یوتیوب، ساندکلود و ... بدون تغییر) ...
         if "soundcloud.com" in url or "spotify" in url: ydl_opts = {'outtmpl': output_path, 'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None, 'format': 'bestaudio/best', 'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3'}]}
         else: ydl_opts = {'outtmpl': output_path, 'format': 'bestvideo[height<=720]+bestaudio/best[height<=720]/best', 'merge_output_format': 'mp4', 'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None}
         ydl_opts.update({'ignoreerrors': True, 'quiet': True, 'no_warnings': True})
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([url]);
+                ydl.download([url])
                 for f in os.listdir(self.download_dir):
                     if f.startswith(code): downloaded_file = os.path.join(self.download_dir, f); self.active_jobs[code]["status"] = "Downloaded"; return downloaded_file
             return None
@@ -96,17 +90,14 @@ class TelethonWorker:
 
     # ... (بقیه توابع کلاس بدون تغییر باقی می‌مانند) ...
     async def upload_progress(self, sent_bytes, total_bytes, code):
-        percentage = int(sent_bytes * 100 / total_bytes)
+        percentage = int(sent_bytes * 100 / total_bytes);
         if percentage % 10 == 0 or percentage == 100:
             if code in self.active_jobs: self.active_jobs[code]["status"] = f"Uploading: {percentage}%"
     async def process_job(self, message):
         if message.id in self.processed_ids: return
         self.processed_ids.add(message.id)
         try:
-            lines = message.text.split('\n')
-            url = next(line.replace("URL:", "").strip() for line in lines if line.startswith("URL:"))
-            code = next(line.replace("CODE:", "").strip() for line in lines if line.startswith("CODE:"))
-            user_id = int(next(line.replace("USER_ID:", "").strip() for line in lines if line.startswith("USER_ID:")))
+            lines = message.text.split('\n'); url = next(l.replace("URL:", "").strip() for l in lines if l.startswith("URL:")); code = next(l.replace("CODE:", "").strip() for l in lines if l.startswith("CODE:")); user_id = int(next(l.replace("USER_ID:", "").strip() for l in lines if l.startswith("USER_ID:")))
         except: return
         file_path = await asyncio.to_thread(self.download_media, url, code, user_id)
         if file_path and os.path.exists(file_path):
@@ -117,8 +108,7 @@ class TelethonWorker:
             try:
                 caption = f"✅ Uploaded\nCODE: {code}\nSIZE: {file_size}"
                 await self.app.send_file(
-                    message.chat_id, file_path, caption=caption,
-                    reply_to=message.id, attributes=upload_attributes,
+                    message.chat_id, file_path, caption=caption, reply_to=message.id, attributes=upload_attributes,
                     progress_callback=lambda s, t: self.upload_progress(s, t, code)
                 )
                 self.active_jobs[code]["status"] = "Completed"
