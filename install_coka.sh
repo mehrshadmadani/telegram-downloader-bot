@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # =============================================================
-#         Coka Bot Manager - Universal Smart Installer v27.0 (View Requirements)
+#         Coka Bot Manager - Universal Smart Installer v27.0 (Final Stable)
 # =============================================================
 
 COKA_SCRIPT_PATH="/usr/local/bin/coka"
@@ -24,6 +24,7 @@ DEFAULT_MANAGER_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-d
 
 if [ -f "$COKA_SCRIPT_PATH" ]; then
     print_warning "'coka' command is already installed."
+    print_info "Fetching latest version info from GitHub..."
     LATEST_VERSION=$(curl -sL "$VERSION_URL" | head -n 1)
     if [ -z "$LATEST_VERSION" ]; then LATEST_VERSION="N/A"; fi
     
@@ -39,7 +40,7 @@ if [ -f "$COKA_SCRIPT_PATH" ]; then
     fi
 else
     LATEST_VERSION=$(curl -sL "$VERSION_URL" | head -n 1)
-    if [ -z "$LATEST_VERSION" ]; then LATEST_VERSION="27.0 (View Reqs)"; fi
+    if [ -z "$LATEST_VERSION" ]; then LATEST_VERSION="27.0 (Final Stable)"; fi
 fi
 
 # --- Interactive Setup ---
@@ -61,20 +62,18 @@ cat > "$COKA_SCRIPT_PATH" << EOF
 VERSION="$LATEST_VERSION"
 BOT_DIR="$BOT_DIR"
 MANAGER_SCRIPT_URL="$MANAGER_URL"
-REQS_SCRIPT_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/requirements.txt"
 WORKER_SCRIPT_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/advanced_worker.py"
 MAIN_BOT_SCRIPT_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/main_bot.py"
+REQS_SCRIPT_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/requirements.txt"
 WORKER_SCREEN_NAME="worker_session"
 MAIN_BOT_SCREEN_NAME="main_bot_session"
 
-# --- Functions ---
 print_info() { echo -e "\e[34mINFO: \$1\e[0m"; }
 print_success() { echo -e "\e[32mSUCCESS: \$1\e[0m"; }
 print_error() { echo -e "\e[31mERROR: \$1\e[0m"; }
 print_warning() { echo -e "\e[33mWARNING: \$1\e[0m"; }
 is_running() { screen -list | grep -q "\$1"; }
 
-# --- Core Logic Functions ---
 start_service() {
     local service_name=\$1; local screen_name=\$2; local script_name=\$3
     print_info "Ensuring \$service_name is started..."
@@ -99,14 +98,12 @@ update_script() {
     local service_name=\$1
     local script_url=\$2
     local file_path=\$3
-    
     print_warning "This will overwrite '\$file_path' with the latest version from GitHub."
     read -p "Are you sure? (y/n): " confirm
     if [[ "\$confirm" != "y" ]]; then
         print_info "Update for \$service_name cancelled."
         return
     fi
-    
     print_info "Updating \$service_name script..."
     curl -s -L "\$script_url" -o "\$file_path"
     if [ \$? -eq 0 ]; then
@@ -141,14 +138,11 @@ update_manager() {
 setup_requirements_cron() {
     CRON_FILE="/etc/cron.d/coka_requirements_update"
     CRON_COMMAND="cd \$BOT_DIR && source venv/bin/activate && pip install -r requirements.txt --upgrade"
-    
     if [ -f "\$CRON_FILE" ]; then
         print_warning "Cron job already exists. It will be overwritten."
     fi
-    
     print_info "Setting up a weekly cron job to update Python libraries..."
     echo "0 3 * * 0 root \$CRON_COMMAND >> \$BOT_DIR/cron.log 2>&1" | sudo tee "\$CRON_FILE" > /dev/null
-    
     print_success "Cron job created successfully."
     print_info "Libraries will be updated automatically every Sunday at 3 AM."
     print_info "Log of updates will be saved in: \$BOT_DIR/cron.log"
@@ -164,7 +158,6 @@ remove_requirements_cron() {
     fi
 }
 
-# --- UI Functions ---
 show_panel_and_menu() {
     clear
     SERVER_IP=\$(hostname -I | cut -d' ' -f1)
