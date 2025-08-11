@@ -8,22 +8,25 @@ from datetime import datetime, timezone
 import yt_dlp
 from telethon import TelegramClient
 from telethon.tl.types import DocumentAttributeVideo
-import instaloader
 from instagrapi import Client as InstagrapiClient
 from config import (TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_PHONE, 
                     GROUP_ID, ORDER_TOPIC_ID, MAJID_API_TOKEN, 
-                    INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD, NESTCODE_API_KEY)
+                    INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
 
 # --- سیستم لاگ‌گیری ---
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(name)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 logging.getLogger("telethon").setLevel(logging.WARNING)
 
 class TelethonWorker:
     def __init__(self, api_id, api_hash, phone):
         self.app = TelegramClient("telethon_session", api_id, api_hash)
-        self.phone = phone; self.download_dir = "downloads"; os.makedirs(self.download_dir, exist_ok=True)
-        self.processed_ids = set(); self.start_time = datetime.now(timezone.utc); self.active_jobs = {}
+        self.phone = phone
+        self.download_dir = "downloads"
+        os.makedirs(self.download_dir, exist_ok=True)
+        self.processed_ids = set()
+        self.start_time = datetime.now(timezone.utc)
+        self.active_jobs = {}
         self.instagrapi_client = InstagrapiClient()
         session_file = "insta_session.json"
         try:
@@ -40,24 +43,16 @@ class TelethonWorker:
     def get_video_metadata(self, file_path):
         try:
             command = ['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height,duration', '-of', 'json', file_path]
-            result = subprocess.run(command, capture_output=True, text=True, check=True, timeout=30); data = json.loads(result.stdout)['streams'][0]
+            result = subprocess.run(command, capture_output=True, text=True, check=True, timeout=30)
+            data = json.loads(result.stdout)['streams'][0]
             return {'duration': int(float(data['duration'])), 'width': int(data['width']), 'height': int(data['height'])}
         except: return None
-    
-    def _download_from_url(self, url, output_path):
-        """یک تابع کمکی برای دانلود فایل از لینک مستقیم"""
-        media_res = requests.get(url, stream=True, timeout=1800)
-        media_res.raise_for_status()
-        with open(output_path, 'wb') as f:
-            for chunk in media_res.iter_content(chunk_size=8192): f.write(chunk)
-        return output_path
-
+        
     def download_media(self, url, code, user_id):
         self.active_jobs[code] = {"user_id": user_id, "status": "Downloading..."}
         
-        # --- زنجیره دانلود اصلاح شده ---
         if "instagram.com" in url:
-            # 1. تلاش با instagrapi
+            # 1. تلاش با instagrapi (قوی‌ترین روش)
             try:
                 logger.info(f"Attempt 1 (instagrapi) for CODE: {code}")
                 media_pk = self.instagrapi_client.media_pk_from_url(url)
@@ -66,14 +61,18 @@ class TelethonWorker:
                 dl_path = None
                 if media_type in [1, 2]: # Photo or Video
                     dl_path = self.instagrapi_client.video_download(media_pk, self.download_dir) if media_type == 2 else self.instagrapi_client.photo_download(media_pk, self.download_dir)
+                elif media_type == 8: # Album/Carousel
+                    first_item_pk = media_info['resources'][0]['pk']
+                    dl_path = self.instagrapi_client.media_download(first_item_pk, self.download_dir)
+
                 if dl_path:
                     final_path = os.path.join(self.download_dir, f"{code}{os.path.splitext(dl_path)[1]}")
                     os.rename(dl_path, final_path)
                     self.active_jobs[code]["status"] = "Downloaded"; return (final_path, "instagrapi")
             except Exception as e:
                 logger.warning(f"instagrapi failed for {code}: {e}")
-            
-            # 2. تلاش با MajidAPI
+
+            # 2. تلاش با MajidAPI (روش پشتیبان)
             try:
                 logger.info(f"Attempt 2 (MajidAPI) for CODE: {code}")
                 api_url = f"https://api.majidapi.ir/instagram/download?url={url}&out=url&token={MAJID_API_TOKEN}"
@@ -81,23 +80,26 @@ class TelethonWorker:
                 if data.get("status") == 200:
                     result = data.get("result", {}); media_url = result.get("video") or result.get("image")
                     if media_url:
+                        # --- بازگشت به منطق ساده و کارآمد قبلی ---
                         ext = ".jpg" if ".jpg" in media_url.split('?')[0] else ".mp4"
                         output_path = os.path.join(self.download_dir, f"{code}{ext}")
-                        self._download_from_url(media_url, output_path)
+                        media_res = requests.get(media_url, stream=True, timeout=1800)
+                        with open(output_path, 'wb') as f:
+                            for chunk in media_res.iter_content(chunk_size=8192): f.write(chunk)
                         self.active_jobs[code]["status"] = "Downloaded"; return (output_path, "MajidAPI")
             except Exception as e:
                 logger.warning(f"MajidAPI failed for {code}: {e}")
 
-        # منطق دانلود برای پلتفرم‌های غیر اینستاگرام یا به عنوان آخرین راه حل
+        # منطق دانلود برای پلتفرم‌های دیگر (و پشتیبان نهایی اینستاگرام)
         try:
             platform = "yt-dlp (Fallback)" if "instagram.com" in url else "yt-dlp"
-            logger.info(f"Attempting {platform} for CODE: {code}")
+            logger.info(f"Final Attempt ({platform}) for CODE: {code}")
             output_path = os.path.join(self.download_dir, f"{code} - %(title).30s.%(ext)s")
             base_opts = {'outtmpl': output_path, 'cookiefile': 'cookies.txt', 'ignoreerrors': True, 'quiet': True, 'no_warnings': True, 'socket_timeout': 1800}
-            if "soundcloud.com" in url or "spotify.com" in url:
+            if "soundcloud.com" in url or "spotify" in url:
                 ydl_opts = {'format': 'bestaudio/best', 'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3'}]}
             elif "instagram.com" in url:
-                 ydl_opts = {'format': 'best'}
+                ydl_opts = {'format': 'best'}
             else: # YouTube
                 ydl_opts = {'format': 'bestvideo[height<=720]+bestaudio/best[height<=720]/best', 'merge_output_format': 'mp4'}
             ydl_opts.update(base_opts)
@@ -105,7 +107,8 @@ class TelethonWorker:
                 ydl.download([url])
                 for f in os.listdir(self.download_dir):
                     if f.startswith(code):
-                        self.active_jobs[code]["status"] = "Downloaded"; return (os.path.join(self.download_dir, f), "yt-dlp")
+                        self.active_jobs[code]["status"] = "Downloaded"
+                        return (os.path.join(self.download_dir, f), "yt-dlp")
         except Exception as e:
             logger.error(f"Final method (yt-dlp) failed for CODE {code}: {e}")
         
@@ -113,7 +116,7 @@ class TelethonWorker:
 
     # ... (بقیه توابع کلاس بدون تغییر) ...
     async def upload_progress(self, sent_bytes, total_bytes, code):
-        percentage = int(sent_bytes * 100 / total_bytes)
+        percentage = int(sent_bytes * 100 / total_bytes);
         if percentage % 10 == 0 or percentage == 100:
             if code in self.active_jobs: self.active_jobs[code]["status"] = f"Uploading: {percentage}%"
     async def process_job(self, message):
@@ -122,7 +125,9 @@ class TelethonWorker:
         try:
             lines = message.text.split('\n'); url = next(l.replace("URL:", "").strip() for l in lines if l.startswith("URL:")); code = next(l.replace("CODE:", "").strip() for l in lines if l.startswith("CODE:")); user_id = int(next(l.replace("USER_ID:", "").strip() for l in lines if l.startswith("USER_ID:")))
         except: return
+        
         file_path, download_method = await asyncio.to_thread(self.download_media, url, code, user_id)
+
         if file_path and os.path.exists(file_path):
             file_size = os.path.getsize(file_path); upload_attributes = []
             if file_path.lower().endswith(('.mp4', '.mkv', '.mov')):
@@ -154,7 +159,7 @@ class TelethonWorker:
     async def run(self):
         await self.app.start(phone=self.phone)
         me = await self.app.get_me()
-        logger.info(f"Worker (Final Version) ba movaffaghiat be onvane {me.first_name} vared shod.")
+        logger.info(f"Worker (Stable Fallback) ba movaffaghiat be onvane {me.first_name} vared shod.")
         target_chat_id = GROUP_ID; target_topic_id = ORDER_TOPIC_ID
         try: entity = await self.app.get_entity(target_chat_id)
         except Exception as e: logger.critical(f"Nemitavan be Group ID dastresi peyda kard. Khata: {e}"); return
