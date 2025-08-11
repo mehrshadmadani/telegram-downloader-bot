@@ -4,3 +4,4 @@ yt-dlp
 psycopg2-binary
 requests
 instagrapi
+instaloader
