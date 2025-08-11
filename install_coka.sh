@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # =============================================================
-#         Coka Bot Manager - Universal Smart Installer v14.0 (Full Monitoring)
+#         Coka Bot Manager - Universal Smart Installer v15.0 (Flicker-Free)
 # =============================================================
 
 COKA_SCRIPT_PATH="/usr/local/bin/coka"
@@ -27,7 +27,7 @@ if [ -f "$COKA_SCRIPT_PATH" ]; then
     EXISTING_MANAGER_URL=$(grep -oP 'MANAGER_SCRIPT_URL="\K[^"]+' "$COKA_SCRIPT_PATH" || echo "$DEFAULT_MANAGER_URL")
     DEFAULT_BOT_DIR=$EXISTING_BOT_DIR
     DEFAULT_MANAGER_URL=$EXISTING_MANAGER_URL
-    read -p "Do you want to force overwrite it with the latest version (v14.0)? (y/n): " OVERWRITE_CONFIRM
+    read -p "Do you want to force overwrite it with the latest version (v15.0)? (y/n): " OVERWRITE_CONFIRM
     if [[ "$OVERWRITE_CONFIRM" != "y" ]]; then
         print_info "Installation cancelled."
         exit 0
@@ -42,15 +42,15 @@ read -p "Enter the raw GitHub URL for this installer script itself [Default: $DE
 MANAGER_URL=${MANAGER_URL_INPUT:-$DEFAULT_MANAGER_URL}
 
 # --- Installation ---
-print_info "Installing required utilities (screen, curl)..."
+print_info "Installing required utilities (screen, curl, bc)..."
 apt-get update > /dev/null 2>&1
-apt-get install -y screen curl > /dev/null 2>&1
+apt-get install -y screen curl bc > /dev/null 2>&1
 print_info "Creating the 'coka' management script..."
 
 # --- Writing the coka script content ---
 cat > "$COKA_SCRIPT_PATH" << EOF
 #!/bin/bash
-VERSION="14.0 (Live Monitoring)"
+VERSION="15.0 (Flicker-Free)"
 BOT_DIR="$BOT_DIR"
 MANAGER_SCRIPT_URL="$MANAGER_URL"
 WORKER_SCREEN_NAME="worker_session"
@@ -95,37 +95,34 @@ update_manager() {
     fi
 }
 
-format_speed() {
-    local speed=\$1
-    if (( \$(echo "\$speed > 1024*1024" | bc -l) )); then
-        printf "%.2f MB/s" \$(echo "scale=2; \$speed / (1024*1024)" | bc)
-    elif (( \$(echo "\$speed > 1024" | bc -l) )); then
-        printf "%.2f KB/s" \$(echo "scale=2; \$speed / 1024" | bc)
-    else
-        printf "%d B/s" \$speed
-    fi
-}
-
 show_panel() {
-    clear
-    # System Info
+    # Step 1: Gather all data first (this takes ~1 second)
     SERVER_IP=\$(hostname -I | cut -d' ' -f1)
     CPU_USAGE=\$(top -bn1 | grep "Cpu(s)" | sed "s/.*, *\([0-9.]*\)%* id.*/\1/" | awk '{print 100 - \$1"%%"}')
     MEM_INFO=\$(free -m | awk 'NR==2{printf "%.2f/%.2f GB (%.0f%%)", \$3/1024, \$2/1024, \$3*100/\$2 }')
     DISK_INFO=\$(df -h / | awk 'NR==2{printf "%s / %s (%s)", \$3, \$2, \$5}')
-    
-    # Network Info
     INTERFACE=\$(ip route | grep default | awk '{print \$5}' | head -1)
-    RX_BYTES_1=\$(cat /sys/class/net/\$INTERFACE/statistics/rx_bytes)
-    TX_BYTES_1=\$(cat /sys/class/net/\$INTERFACE/statistics/tx_bytes)
-    sleep 1
-    RX_BYTES_2=\$(cat /sys/class/net/\$INTERFACE/statistics/rx_bytes)
-    TX_BYTES_2=\$(cat /sys/class/net/\$INTERFACE/statistics/tx_bytes)
-    RX_SPEED=\$((RX_BYTES_2 - RX_BYTES_1))
-    TX_SPEED=\$((TX_BYTES_2 - TX_BYTES_1))
-    RX_FORMATTED=\$(format_speed \$RX_SPEED)
-    TX_FORMATTED=\$(format_speed \$TX_SPEED)
+    if [ -z "\$INTERFACE" ]; then
+        RX_FORMATTED="N/A"
+        TX_FORMATTED="N/A"
+    else
+        RX_BYTES_1=\$(cat /sys/class/net/\$INTERFACE/statistics/rx_bytes)
+        TX_BYTES_1=\$(cat /sys/class/net/\$INTERFACE/statistics/tx_bytes)
+        sleep 1
+        RX_BYTES_2=\$(cat /sys/class/net/\$INTERFACE/statistics/rx_bytes)
+        TX_BYTES_2=\$(cat /sys/class/net/\$INTERFACE/statistics/tx_bytes)
+        RX_SPEED=\$((RX_BYTES_2 - RX_BYTES_1))
+        TX_SPEED=\$((TX_BYTES_2 - TX_BYTES_1))
+        RX_FORMATTED=\$(awk -v speed=\$RX_SPEED 'BEGIN { if (speed > 1024*1024) printf "%.2f MB/s", speed/(1024*1024); else if (speed > 1024) printf "%.2f KB/s", speed/1024; else printf "%d B/s", speed }')
+        TX_FORMATTED=\$(awk -v speed=\$TX_SPEED 'BEGIN { if (speed > 1024*1024) printf "%.2f MB/s", speed/(1024*1024); else if (speed > 1024) printf "%.2f KB/s", speed/1024; else printf "%d B/s", speed }')
+    fi
+    if is_running "\$WORKER_SCREEN_NAME"; then W_STATUS="\e[1;32mRUNNING\e[0m"; else W_STATUS="\e[1;31mSTOPPED\e[0m"; fi
+    if is_running "\$MAIN_BOT_SCREEN_NAME"; then M_STATUS="\e[1;32mRUNNING\e[0m"; else M_STATUS="\e[1;31mSTOPPED\e[0m"; fi
 
+    # Step 2: Clear the screen
+    clear
+
+    # Step 3: Print all pre-gathered data instantly
     echo -e "\e[1;35m
 ╔═════════════════════════════════════════════════════════════════════════════╗
 ║                          COKA BOT CONTROL PANEL                             ║
@@ -134,8 +131,6 @@ show_panel() {
     echo -e "  \e[1mNetwork (\${INTERFACE}):\e[0m \e[1;37m↓ \$RX_FORMATTED | ↑ \$TX_FORMATTED"
     echo -e "\e[2m-------------------------------------------------------------------------------\e[0m"
     echo -e "  \e[1mServer IP:\e[0m \e[33m\$SERVER_IP\e[0m  \e[1mManager:\e[0m \e[36mv\$VERSION\e[0m"
-    if is_running "\$WORKER_SCREEN_NAME"; then W_STATUS="\e[1;32mRUNNING\e[0m"; else W_STATUS="\e[1;31mSTOPPED\e[0m"; fi
-    if is_running "\$MAIN_BOT_SCREEN_NAME"; then M_STATUS="\e[1;32mRUNNING\e[0m"; else M_STATUS="\e[1;31mSTOPPED\e[0m"; fi
     echo -e "  \e[1mWorker Status:\e[0m \$W_STATUS   \e[1mMain Bot Status:\e[0m \$M_STATUS"
     echo -e "\e[2m-------------------------------------------------------------------------------\e[0m"
 }
@@ -150,7 +145,7 @@ worker_menu() {
         echo "  [4] View Log File"
         echo "  [0] Back to Main Menu"
         echo -e "\e[2m-------------------------------------------------------------------------------\e[0m"
-        read -t 2 -N 1 -p "  Enter your choice (refreshes automatically): " choice
+        read -t 1 -N 1 -p "  Enter your choice (refreshes automatically): " choice
         if [ -z "\$choice" ]; then continue; fi
         case \$choice in
             1) start_service "Worker" "\$WORKER_SCREEN_NAME" "advanced_worker.py"; echo; read -p "Press [Enter]...";;
@@ -158,6 +153,7 @@ worker_menu() {
             3) print_warning "To detach, press Ctrl+A then D."; sleep 2; screen -r "\$WORKER_SCREEN_NAME" ;;
             4) tail -f bot.log ;;
             0) return ;;
+            *) print_error "Invalid option."; echo; read -p "Press [Enter]...";;
         esac
     done
 }
@@ -171,13 +167,14 @@ main_bot_menu() {
         echo "  [3] View Log File"
         echo "  [0] Back to Main Menu"
         echo -e "\e[2m-------------------------------------------------------------------------------\e[0m"
-        read -t 2 -N 1 -p "  Enter your choice (refreshes automatically): " choice
+        read -t 1 -N 1 -p "  Enter your choice (refreshes automatically): " choice
         if [ -z "\$choice" ]; then continue; fi
         case \$choice in
             1) start_service "Main Bot" "\$MAIN_BOT_SCREEN_NAME" "main_bot.py"; echo; read -p "Press [Enter]...";;
             2) stop_service "Main Bot" "\$MAIN_BOT_SCREEN_NAME"; echo; read -p "Press [Enter]...";;
             3) tail -f main_bot.log ;;
             0) return ;;
+            *) print_error "Invalid option."; echo; read -p "Press [Enter]...";;
         esac
     done
 }
@@ -191,24 +188,24 @@ main_menu() {
         echo "  [3] Update This Manager (coka)"
         echo "  [0] Quit"
         echo -e "\e[2m-------------------------------------------------------------------------------\e[0m"
-        read -t 2 -N 1 -p "  Enter your choice (refreshes automatically): " choice
+        read -t 1 -N 1 -p "  Enter your choice (refreshes automatically): " choice
         if [ -z "\$choice" ]; then continue; fi
         case \$choice in
             1) worker_menu ;;
             2) main_bot_menu ;;
             3) update_manager; exit 0 ;;
             0) echo "Exiting."; exit 0 ;;
+            *) print_error "Invalid option."; echo; read -p "Press [Enter]...";;
         esac
     done
 }
 
-# --- Main Script ---
 cd "\$BOT_DIR" || { print_error "Directory not found: \$BOT_DIR"; exit 1; }
 main_menu
 EOF
 
 # --- Final Step: Make it executable ---
 chmod +x "$COKA_SCRIPT_PATH"
-print_success "Management script 'coka' (v14.0) installed successfully!"
+print_success "Management script 'coka' (v15.0) installed successfully!"
 echo
 coka
