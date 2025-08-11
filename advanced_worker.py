@@ -8,8 +8,8 @@ from datetime import datetime, timezone
 import yt_dlp
 from telethon import TelegramClient
 from telethon.tl.types import DocumentAttributeVideo
-from instagrapi import Client # کتابخانه جدید
-from instagrapi.exceptions import LoginRequired
+import instaloader
+from instagrapi import Client as InstagrapiClient
 from config import (TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_PHONE, 
                     GROUP_ID, ORDER_TOPIC_ID, MAJID_API_TOKEN, 
                     INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
@@ -21,86 +21,108 @@ logging.getLogger("telethon").setLevel(logging.WARNING)
 class TelethonWorker:
     def __init__(self, api_id, api_hash, phone):
         self.app = TelegramClient("telethon_session", api_id, api_hash)
-        self.phone = phone
-        self.download_dir = "downloads"
-        os.makedirs(self.download_dir, exist_ok=True)
-        self.processed_ids = set()
-        self.start_time = datetime.now(timezone.utc)
-        self.active_jobs = {}
-        
-        # --- راه‌اندازی کلاینت instagrapi ---
-        self.insta_client = Client()
-        session_file = "insta_session.json"
+        self.phone = phone; self.download_dir = "downloads"; os.makedirs(self.download_dir, exist_ok=True)
+        self.processed_ids = set(); self.start_time = datetime.now(timezone.utc); self.active_jobs = {}
+        # --- راه‌اندازی هر دو کلاینت اینستاگرام ---
+        self.instaloader_client = instaloader.Instaloader(dirname_pattern=os.path.join(self.download_dir, "{target}"), save_metadata=False, compress_json=False, post_metadata_txt_pattern="")
+        self.instagrapi_client = InstagrapiClient()
         try:
-            if os.path.exists(session_file):
-                logger.info("Loading Instagram session from file...")
-                self.insta_client.load_settings(session_file)
-                self.insta_client.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
-            else:
-                logger.info("Instagram session file not found. Logging in with username/password...")
-                self.insta_client.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
-                self.insta_client.dump_settings(session_file)
-            logger.info("Instagram login/session load successful.")
+            logger.info("Loading Instagram sessions...")
+            self.instaloader_client.load_session_from_file(INSTAGRAM_USERNAME)
+            self.instagrapi_client.load_settings("insta_session.json")
+            self.instagrapi_client.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD) # برای رفرش کردن سشن
+            logger.info("All Instagram sessions loaded successfully.")
         except Exception as e:
-            logger.error(f"FATAL: Failed to login to Instagram with instagrapi: {e}")
+            logger.error(f"Session loading failed, will attempt fresh login: {e}")
+            self.setup_instagram_sessions()
 
-    # ... (توابع get_video_metadata, upload_progress, display_dashboard بدون تغییر) ...
+    def setup_instagram_sessions(self):
+        try:
+            logger.info("Attempting fresh login for instagrapi...")
+            self.instagrapi_client.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
+            self.instagrapi_client.dump_settings("insta_session.json")
+            logger.info("instagrapi login successful and session saved.")
+        except Exception as e:
+            logger.error(f"FATAL: instagrapi login failed: {e}")
+        try:
+            logger.info("For instaloader, please run 'instaloader --login=YOUR_USERNAME' manually if needed.")
+            self.instaloader_client.load_session_from_file(INSTAGRAM_USERNAME)
+        except Exception as e:
+            logger.error(f"instaloader session is not valid: {e}")
+    
+    # ... (تابع get_video_metadata بدون تغییر) ...
     def get_video_metadata(self, file_path):
         try:
             command = ['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height,duration', '-of', 'json', file_path]
             result = subprocess.run(command, capture_output=True, text=True, check=True, timeout=30); data = json.loads(result.stdout)['streams'][0]
             return {'duration': int(float(data['duration'])), 'width': int(data['width']), 'height': int(data['height'])}
         except: return None
-    
+
     def download_media(self, url, code, user_id):
         self.active_jobs[code] = {"user_id": user_id, "status": "Downloading..."}
         
-        # --- منطق دانلود با instagrapi ---
         if "instagram.com" in url:
+            # 1. تلاش با API
             try:
-                logger.info(f"Attempting download with instagrapi for CODE: {code}")
-                media_pk = self.insta_client.media_pk_from_url(url)
-                media_info = self.insta_client.media_info(media_pk).dict()
+                logger.info(f"Attempt 1 (API) for CODE: {code}")
+                api_url = f"https://api.majidapi.ir/instagram/download?url={url}&out=url&token={MAJID_API_TOKEN}"
+                api_response = requests.get(api_url, timeout=20); data = api_response.json()
+                if data.get("status") == 200:
+                    result = data.get("result", {}); media_url = result.get("video") or result.get("image")
+                    if media_url:
+                        ext = ".jpg" if ".jpg" in media_url.split('?')[0] else ".mp4"; output_path = os.path.join(self.download_dir, f"{code}{ext}")
+                        media_res = requests.get(media_url, stream=True, timeout=1800)
+                        with open(output_path, 'wb') as f:
+                            for chunk in media_res.iter_content(chunk_size=8192): f.write(chunk)
+                        self.active_jobs[code]["status"] = "Downloaded"; return output_path
+            except Exception as e: logger.warning(f"API failed for {code}: {e}")
 
+            # 2. تلاش با instagrapi
+            try:
+                logger.info(f"Attempt 2 (instagrapi) for CODE: {code}")
+                media_pk = self.instagrapi_client.media_pk_from_url(url)
+                media_info = self.instagrapi_client.media_info(media_pk).dict()
                 media_type = media_info.get("media_type")
                 output_path = None
-
-                if media_type == 1: # Photo
-                    output_path = self.insta_client.photo_download(media_pk, folder=self.download_dir)
-                elif media_type == 2: # Video
-                    output_path = self.insta_client.video_download(media_pk, folder=self.download_dir)
-                elif media_type == 8: # Album/Carousel
-                    # دانلود اولین آیتم از آلبوم
-                    first_item = media_info['resources'][0]
-                    if first_item['media_type'] == 1:
-                        output_path = self.insta_client.photo_download(first_item['pk'], folder=self.download_dir)
-                    elif first_item['media_type'] == 2:
-                        output_path = self.insta_client.video_download(first_item['pk'], folder=self.download_dir)
-
+                if media_type in [1, 2]: # Photo or Video
+                    output_path = self.instagrapi_client.video_download(media_pk, folder=self.download_dir) if media_type == 2 else self.instagrapi_client.photo_download(media_pk, folder=self.download_dir)
                 if output_path:
-                    # تغییر نام فایل به کد منحصر به فرد
                     final_path = os.path.join(self.download_dir, f"{code}{os.path.splitext(output_path)[1]}")
                     os.rename(output_path, final_path)
                     self.active_jobs[code]["status"] = "Downloaded"; return final_path
-
-            except Exception as e:
-                logger.error(f"instagrapi failed for CODE {code}: {e}. No further fallbacks.")
-
-        # --- منطق دانلود برای پلتفرم‌های دیگر (yt-dlp) ---
-        else:
-            logger.info(f"Using yt-dlp for CODE: {code}")
-            # ... (کد yt-dlp بدون تغییر) ...
-            output_path = os.path.join(self.download_dir, f"{code} - %(title).30s.%(ext)s")
-            base_opts = {'outtmpl': output_path, 'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None, 'ignoreerrors': True, 'quiet': True, 'no_warnings': True, 'socket_timeout': 1800}
-            if "soundcloud" in url or "spotify" in url: ydl_opts = {'format': 'bestaudio/best', 'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3'}]}
-            else: ydl_opts = {'format': 'bestvideo[height<=720]+bestaudio/best[height<=720]/best', 'merge_output_format': 'mp4'}
-            ydl_opts.update(base_opts)
+            except Exception as e: logger.warning(f"instagrapi failed for {code}: {e}")
+            
+            # 3. تلاش با instaloader
             try:
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    ydl.download([url])
-                    for f in os.listdir(self.download_dir):
-                        if f.startswith(code): self.active_jobs[code]["status"] = "Downloaded"; return os.path.join(self.download_dir, f)
-            except Exception as e: logger.error(f"yt-dlp download failed for CODE {code}: {e}")
+                logger.info(f"Attempt 3 (instaloader) for CODE: {code}")
+                shortcode = url.split('/')[-2]
+                post = instaloader.Post.from_shortcode(self.instaloader_client.context, shortcode)
+                self.instaloader_client.download_post(post, target=f"{code}_temp")
+                downloaded_folder = os.path.join(self.download_dir, f"{code}_temp")
+                for filename in os.listdir(downloaded_folder):
+                    if not filename.endswith(('.txt', '.json', '.xz')):
+                        src = os.path.join(downloaded_folder, filename)
+                        final_path = os.path.join(self.download_dir, f"{code}{os.path.splitext(filename)[1]}")
+                        os.rename(src, final_path);
+                        for f_extra in os.listdir(downloaded_folder): os.remove(os.path.join(downloaded_folder, f_extra))
+                        os.rmdir(downloaded_folder)
+                        self.active_jobs[code]["status"] = "Downloaded"; return final_path
+            except Exception as e: logger.warning(f"Instaloader failed for {code}: {e}")
+
+        # 4. تلاش آخر با yt-dlp (برای همه پلتفرم‌ها از جمله اینستاگرام)
+        logger.info(f"Final Attempt (yt-dlp) for CODE: {code}")
+        output_path = os.path.join(self.download_dir, f"{code} - %(title).30s.%(ext)s")
+        base_opts = {'outtmpl': output_path, 'cookiefile': 'cookies.txt', 'ignoreerrors': True, 'quiet': True, 'no_warnings': True, 'socket_timeout': 1800}
+        if "soundcloud" in url or "spotify" in url: ydl_opts = {'format': 'bestaudio/best', 'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3'}]}
+        elif "instagram.com" in url: ydl_opts = {'format': 'best'}
+        else: ydl_opts = {'format': 'bestvideo[height<=720]+bestaudio/best[height<=720]/best', 'merge_output_format': 'mp4'}
+        ydl_opts.update(base_opts)
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
+                for f in os.listdir(self.download_dir):
+                    if f.startswith(code): self.active_jobs[code]["status"] = "Downloaded"; return os.path.join(self.download_dir, f)
+        except Exception as e: logger.error(f"All methods failed. Last error from yt-dlp: {e}")
         
         self.active_jobs[code]["status"] = "Download Failed"; return None
 
@@ -145,7 +167,7 @@ class TelethonWorker:
     async def run(self):
         await self.app.start(phone=self.phone)
         me = await self.app.get_me()
-        logger.info(f"Worker (instagrapi Version) ba movaffaghiat be onvane {me.first_name} vared shod.")
+        logger.info(f"Worker (Ultimate Version) ba movaffaghiat be onvane {me.first_name} vared shod.")
         target_chat_id = GROUP_ID; target_topic_id = ORDER_TOPIC_ID
         try: entity = await self.app.get_entity(target_chat_id)
         except Exception as e: logger.critical(f"Nemitavan be Group ID dastresi peyda kard. Khata: {e}"); return
@@ -162,4 +184,4 @@ class TelethonWorker:
 async def main():
     worker = TelethonWorker(api_id=TELEGRAM_API_ID, api_hash=TELEGRAM_API_HASH, phone=TELEGRAM_PHONE); await worker.run()
 if __name__ == "__main__":
-    print("--- Rah andazi instagrapi Worker ---"); asyncio.run(main())
+    print("--- Rah andazi Ultimate Worker ---"); asyncio.run(main())
