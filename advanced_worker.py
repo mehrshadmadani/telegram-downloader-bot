@@ -6,6 +6,7 @@ import subprocess
 import base64
 import requests
 import shutil
+import re
 from datetime import datetime, timezone
 from functools import partial
 
@@ -19,7 +20,7 @@ from config import (TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_PHONE,
                     GROUP_ID, ORDER_TOPIC_ID, MAJID_API_TOKEN,
                     INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD, NESTCODE_API_KEY)
 
-# --- سیستم لاگ‌گیری ---
+# --- سیستم لاگ‌گیری پیشرفته ---
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - [%(funcName)s] - %(message)s')
@@ -85,8 +86,8 @@ class TelethonWorker:
                     f.write(chunk)
         return file_path
 
-    def _try_instagrapi(self, url, code):
-        logger.info(f"[{code}] Attempt 1: Instagrapi")
+    def _try_instagrapi_post(self, url, code):
+        logger.info(f"[{code}] Attempt 1: Instagrapi (Post/Reel)")
         if not self.instagrapi_client: raise Exception("Instagrapi client not logged in.")
         media_pk = self.instagrapi_client.media_pk_from_url(url)
         media_info = self.instagrapi_client.media_info(media_pk).dict()
@@ -106,8 +107,8 @@ class TelethonWorker:
         if downloaded_files: return downloaded_files, caption, "Instagrapi"
         return [], None, None
 
-    def _try_instaloader(self, url, code):
-        logger.info(f"[{code}] Attempt 2: Instaloader")
+    def _try_instaloader_post(self, url, code):
+        logger.info(f"[{code}] Attempt 2: Instaloader (Post/Reel)")
         if not self.instaloader_client: raise Exception("Instaloader client not logged in.")
         shortcode = url.split('/')[-2]
         post = instaloader.Post.from_shortcode(self.instaloader_client.context, shortcode)
@@ -134,10 +135,8 @@ class TelethonWorker:
         api_url = f"https://api.majidapi.ir/instagram/download?url={url}&out=url&token={MAJID_API_TOKEN}"
         data = requests.get(api_url, timeout=30).json()
         if data.get("status") != 200: raise Exception(f"MajidAPI Error: {data.get('result')}")
-        
         result = data.get("result", {})
         caption = result.get("caption", "")
-        
         media_urls = result.get("carousel") or ([result.get("video")] if result.get("video") else []) or result.get("images")
         downloaded_files = []
         for i, media_url in enumerate(media_urls):
@@ -153,10 +152,8 @@ class TelethonWorker:
         api_url = f"https://open.nestcode.org/apis-1/InstagramDownloader?url={url}&key={NESTCODE_API_KEY}"
         data = requests.get(api_url, timeout=30).json()
         if data.get("status") != "success": raise Exception(f"NestCode API Error: {data.get('data')}")
-        
         result = data.get("data", {})
         caption = result.get("caption", "")
-
         media_urls = result.get("medias", [])
         downloaded_files = []
         for i, media_url in enumerate(media_urls):
@@ -167,44 +164,78 @@ class TelethonWorker:
         if downloaded_files: return downloaded_files, caption, "NestCode API"
         return [], None, None
 
-    def download_from_instagram(self, url, code):
-        methods = [self._try_instagrapi, self._try_instaloader, self._try_yt_dlp_insta, self._try_majidapi, self._try_nestcode_api]
+    def download_instagram_post(self, url, code):
+        methods = [self._try_instagrapi_post, self._try_instaloader_post, self._try_yt_dlp_insta, self._try_majidapi, self._try_nestcode_api]
         for method_func in methods:
             try:
                 file_paths, caption, method_name = method_func(url, code)
                 if file_paths:
-                    logger.info(f"✅ [{code}] Successfully downloaded using {method_name}.")
+                    logger.info(f"✅ [{code}] Successfully downloaded post using {method_name}.")
                     return file_paths, caption, method_name
             except Exception as e:
                 logger.warning(f"⚠️ [{code}] Method {method_func.__name__} failed: {e}")
         return [], None, None
 
+    def download_instagram_story(self, url, code):
+        logger.info(f"[{code}] Starting Story/Highlight download with Instagrapi")
+        if not self.instagrapi_client: raise Exception("Instagrapi client not logged in.")
+        
+        media_pk = self.instagrapi_client.media_pk_from_url(url)
+        media_info = self.instagrapi_client.media_info(media_pk).dict()
+        caption = f"Story by @{media_info.get('user', {}).get('username', '')}"
+
+        dl_path, ext = None, ".jpg"
+        if media_info.get("media_type") == 2: # Video
+            dl_path, ext = self.instagrapi_client.video_download(media_pk, self.download_dir), ".mp4"
+        elif media_info.get("media_type") == 1: # Photo
+            dl_path, ext = self.instagrapi_client.photo_download(media_pk, self.download_dir), ".jpg"
+
+        if dl_path:
+            final_path = os.path.join(self.download_dir, f"{code}{ext}")
+            os.rename(dl_path, final_path)
+            logger.info(f"✅ [{code}] Successfully downloaded story using Instagrapi.")
+            return [final_path], caption, "Instagrapi Story"
+        return [], None, None
+
+    def download_instagram_profile(self, url, code):
+        logger.info(f"[{code}] Starting profile info download")
+        if not self.instagrapi_client: raise Exception("Instagrapi client not logged in.")
+        
+        username = re.search(r'instagram\.com/([a-zA-Z0-9\._]+)', url).group(1)
+        user_info = self.instagrapi_client.user_info_by_username(username).dict()
+        
+        profile_pic_url = user_info.get('profile_pic_url_hd') or user_info.get('profile_pic_url')
+        output_path = os.path.join(self.download_dir, f"{code}_profile.jpg")
+        self._download_from_url(profile_pic_url, output_path)
+        
+        caption = (f"👤 **{user_info.get('full_name')}** (`@{user_info.get('username')}`)\n\n"
+                   f"**Bio:**\n{user_info.get('biography')}\n\n"
+                   f"----------------------------------------\n"
+                   f"**Posts:** {user_info.get('media_count')} | "
+                   f"**Followers:** {user_info.get('follower_count')} | "
+                   f"**Following:** {user_info.get('following_count')}")
+        logger.info(f"✅ [{code}] Successfully fetched profile info using Instagrapi.")
+        return [output_path], caption, "Instagrapi Profile"
+
     def yt_dlp_progress_hook(self, d, code):
         if d['status'] == 'downloading':
-            percent_str = d.get('_percent_str', '0.0%').strip()
-            speed_str = d.get('_speed_str', 'N/A').strip()
-            if code in self.active_jobs:
-                self.active_jobs[code]["status"] = f"Downloading: {percent_str} at {speed_str}"
+            percent_str, speed_str = d.get('_percent_str', '0.0%').strip(), d.get('_speed_str', 'N/A').strip()
+            if code in self.active_jobs: self.active_jobs[code]["status"] = f"Downloading: {percent_str} at {speed_str}"
         elif d['status'] == 'finished':
-            if code in self.active_jobs:
-                self.active_jobs[code]["status"] = "Download Finished, Merging..."
+            if code in self.active_jobs: self.active_jobs[code]["status"] = "Download Finished, Merging..."
 
     def download_other_platforms(self, url, code):
         try:
-            logger.info(f"[{code}] Starting download process for URL: {url}")
+            logger.info(f"[{code}] Starting download for URL: {url}")
             output_path = os.path.join(self.download_dir, f"{code}.%(ext)s")
-            ydl_opts = {
-                'outtmpl': output_path, 'cookiefile': 'cookies.txt',
-                'ignoreerrors': True, 'no_warnings': True, 'quiet': True,
-                'format': 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best',
-                'merge_output_format': 'mp4',
-                'progress_hooks': [partial(self.yt_dlp_progress_hook, code=code)],
-            }
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info_dict = ydl.extract_info(url, download=True)
+            ydl_opts = {'outtmpl': output_path, 'cookiefile': 'cookies.txt', 'ignoreerrors': True, 
+                        'no_warnings': True, 'quiet': True,
+                        'format': 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best',
+                        'merge_output_format': 'mp4',
+                        'progress_hooks': [partial(self.yt_dlp_progress_hook, code=code)]}
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl: info_dict = ydl.extract_info(url, download=True)
             downloaded_files = [os.path.join(self.download_dir, f) for f in os.listdir(self.download_dir) if f.startswith(code)]
-            if not downloaded_files:
-                raise Exception("yt-dlp finished but no files were found.")
+            if not downloaded_files: raise Exception("yt-dlp finished but no files were found.")
             caption = info_dict.get('title', '') if info_dict else ""
             return downloaded_files, caption, "yt-dlp"
         except Exception as e:
@@ -223,8 +254,7 @@ class TelethonWorker:
 
     async def upload_single_file(self, message, file_path, code, download_method, index, total_files, original_caption):
         try:
-            if not os.path.exists(file_path):
-                raise Exception(f"File vanished: {os.path.basename(file_path)}")
+            if not os.path.exists(file_path): raise Exception(f"File vanished: {os.path.basename(file_path)}")
             file_size = os.path.getsize(file_path)
             self.active_jobs[code]["status"] = f"Uploading {index}/{total_files}..."
             logger.info(f"[{code}] Uploading {index}/{total_files}: {os.path.basename(file_path)} ({file_size / 1024**2:.2f} MB)")
@@ -258,9 +288,23 @@ class TelethonWorker:
             self.active_jobs[code] = {"user_id": user_id, "status": "Queued", "error": None}
             logger.info(f"[{code}] Job received for user [{user_id}].")
             
-            if "instagram.com" in url:
-                self.active_jobs[code]["status"] = "Downloading (Instagram)..."
-                file_paths, caption_text, method = await asyncio.to_thread(self.download_from_instagram, url, code)
+            file_paths, caption_text, method = [], None, None
+            url_lower = url.lower().strip('/')
+            
+            if "instagram.com" in url_lower:
+                if "/stories/highlights/" in url_lower or "/s/" in url_lower:
+                    self.active_jobs[code]["status"] = "Downloading (Insta Highlight)..."
+                    # Note: Using story downloader for highlights
+                    file_paths, caption_text, method = await asyncio.to_thread(self.download_instagram_story, url, code)
+                elif "/stories/" in url_lower:
+                    self.active_jobs[code]["status"] = "Downloading (Insta Story)..."
+                    file_paths, caption_text, method = await asyncio.to_thread(self.download_instagram_story, url, code)
+                elif "/p/" in url_lower or "/reel/" in url_lower:
+                    self.active_jobs[code]["status"] = "Downloading (Insta Post)..."
+                    file_paths, caption_text, method = await asyncio.to_thread(self.download_instagram_post, url, code)
+                else:
+                    self.active_jobs[code]["status"] = "Fetching (Insta Profile)..."
+                    file_paths, caption_text, method = await asyncio.to_thread(self.download_instagram_profile, url, code)
             else:
                 file_paths, caption_text, method = await asyncio.to_thread(self.download_other_platforms, url, code)
             
@@ -278,7 +322,7 @@ class TelethonWorker:
     async def display_dashboard(self):
         while True:
             os.system('clear' if os.name == 'posix' else 'cls')
-            print("--- 🚀 Advanced Downloader Dashboard (Final v5) 🚀 ---")
+            print("--- 🚀 Advanced Downloader Dashboard (v6 - All-In-One) 🚀 ---")
             print(f"{'Job Code':<12} | {'User ID':<12} | {'Status':<50}")
             print("-" * 80)
             if not self.active_jobs: print("... Waiting for new jobs ...")
@@ -297,7 +341,7 @@ class TelethonWorker:
         try:
             await self.app.start(phone=self.phone)
             me = await self.app.get_me()
-            logger.info(f"Worker (Final v5) successfully logged in as {me.first_name}")
+            logger.info(f"Worker (v6 - All-In-One) successfully logged in as {me.first_name}")
         except Exception as e:
             logger.critical(f"Could not start the worker. Error: {e}")
             return
@@ -316,6 +360,6 @@ class TelethonWorker:
                 await asyncio.sleep(30)
 
 if __name__ == "__main__":
-    logger.info("--- Starting Final Worker (v5) ---")
+    logger.info("--- Starting Final Worker (v6 - All-In-One) ---")
     worker = TelethonWorker(TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_PHONE)
     asyncio.run(worker.run())
