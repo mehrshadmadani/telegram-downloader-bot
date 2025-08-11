@@ -2,7 +2,7 @@ import psycopg2
 import random
 import string
 import base64
-import re # کتابخانه جدید برای تحلیل متن
+import re
 from functools import wraps
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes, CallbackQueryHandler
@@ -11,7 +11,7 @@ from telegram.error import BadRequest
 from config import (BOT_TOKEN, GROUP_ID, DB_NAME, DB_USER, DB_PASS, 
                     DB_HOST, DB_PORT, ORDER_TOPIC_ID, LOG_TOPIC_ID, ADMIN_IDS, FORCED_JOIN_CHANNELS)
 
-# ... (کلاس PostgresDB و دکوراتور membership_required بدون تغییر اینجا قرار میگیرد) ...
+# ... (کلاس PostgresDB و دکوراتور membership_required بدون هیچ تغییری اینجا قرار میگیرد) ...
 class PostgresDB:
     def __init__(self):
         self.conn_params = {"dbname": DB_NAME, "user": DB_USER, "password": DB_PASS, "host": DB_HOST, "port": DB_PORT}
@@ -111,8 +111,7 @@ class AdvancedBot:
     @membership_required
     async def handle_url(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user; self.db.add_user_if_not_exists(user)
-        url = update.message.text.strip()
-        code = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
+        url = update.message.text.strip(); code = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
         self.db.add_job(code, user.id, url)
         message_for_worker = f"⬇️ NEW JOB\nURL: {url}\nCODE: {code}\nUSER_ID: {user.id}"
         await context.bot.send_message(chat_id=self.group_id, text=message_for_worker, message_thread_id=self.order_topic_id)
@@ -123,7 +122,14 @@ class AdvancedBot:
         try:
             caption_lines = update.message.caption.split('\n')
             info = {line.split(":", 1)[0].strip(): line.split(":", 1)[1].strip() for line in caption_lines if ":" in line}
-
+            
+            # --- منطق اصلاح شده برای خواندن شماره اسلاید ---
+            item_info_str = ""
+            for line in caption_lines:
+                if line.startswith("✅ Uploaded"):
+                    item_info_str = line
+                    break
+            
             code = info.get("CODE")
             size = int(info.get("SIZE", 0))
             user_id = self.db.get_user_by_code(code)
@@ -131,34 +137,29 @@ class AdvancedBot:
             
             self.db.update_job_on_complete(code, 'completed', size)
             
-            # --- ساخت کپشن جدید و حرفه‌ای ---
+            # --- ساخت کپشن جدید ---
             caption_parts = []
             
-            # 1. اضافه کردن کپشن اصلی (اگر وجود داشته باشد)
+            # 1. اضافه کردن کپشن اصلی
             if "CAPTION" in info:
                 try:
                     decoded_caption = base64.b64decode(info["CAPTION"]).decode('utf-8').strip()
                     if decoded_caption: caption_parts.append(decoded_caption)
                 except: pass
 
-            # 2. اضافه کردن شماره اسلاید (فقط برای پست‌های چندتایی)
-            item_info_str = info.get("✅ Uploaded", "")
+            # 2. اضافه کردن شماره اسلاید
             match = re.search(r'\((\d+)/(\d+)\)', item_info_str)
             if match:
-                current_item, total_items = int(match.group(1)), int(match.group(2))
-                if total_items > 1:
-                    caption_parts.append(f"اسلاید {current_item}")
+                current_item, total_items = match.group(1), match.group(2)
+                caption_parts.append(f"اسلاید {current_item} از {total_items}")
 
             # 3. اضافه کردن فوتر دائمی
-            footer = (
-                "—————————————————\n"
-                "🍭 Download by [CokaDownloader](https://t.me/parsvip0_bot?start=0)\n"
-                "• Get anything, anytime!"
-            )
+            footer = ("—————————————————\n"
+                      "🍭 Download by [CokaDownloader](https://t.me/parsvip0_bot?start=0)\n"
+                      "• Get anything, anytime!")
             caption_parts.append(footer)
             final_caption = "\n\n".join(caption_parts)
-            # --- پایان ساخت کپشن ---
-
+            
             if update.message.video: await context.bot.send_video(chat_id=user_id, video=update.message.video.file_id, caption=final_caption, parse_mode='Markdown')
             elif update.message.audio: await context.bot.send_audio(chat_id=user_id, audio=update.message.audio.file_id, caption=final_caption, parse_mode='Markdown')
             elif update.message.photo: await context.bot.send_photo(chat_id=user_id, photo=update.message.photo[-1].file_id, caption=final_caption, parse_mode='Markdown')
@@ -170,7 +171,6 @@ class AdvancedBot:
         await self.start_command(update, context)
 
     def run(self):
-        # ... (بقیه تابع run بدون تغییر) ...
         self.app.add_handler(CommandHandler("start", self.start_command))
         self.app.add_handler(CommandHandler("manage", self.manage_command))
         self.app.add_handler(CallbackQueryHandler(self.stats_callback, pattern="^bot_stats$"))
