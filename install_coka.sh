@@ -96,7 +96,7 @@ update_manager() {
 }
 
 show_panel() {
-    # Step 1: Gather all data first (this takes ~1 second)
+    # Step 1: Gather all data first
     SERVER_IP=\$(hostname -I | cut -d' ' -f1)
     CPU_USAGE=\$(top -bn1 | grep "Cpu(s)" | sed "s/.*, *\([0-9.]*\)%* id.*/\1/" | awk '{print 100 - \$1"%%"}')
     MEM_INFO=\$(free -m | awk 'NR==2{printf "%.2f/%.2f GB (%.0f%%)", \$3/1024, \$2/1024, \$3*100/\$2 }')
@@ -153,7 +153,7 @@ worker_menu() {
             3) print_warning "To detach, press Ctrl+A then D."; sleep 2; screen -r "\$WORKER_SCREEN_NAME" ;;
             4) tail -f bot.log ;;
             0) return ;;
-            *) print_error "Invalid option."; echo; read -p "Press [Enter]...";;
+            *) print_error "Invalid option.";;
         esac
     done
 }
@@ -174,7 +174,7 @@ main_bot_menu() {
             2) stop_service "Main Bot" "\$MAIN_BOT_SCREEN_NAME"; echo; read -p "Press [Enter]...";;
             3) tail -f main_bot.log ;;
             0) return ;;
-            *) print_error "Invalid option."; echo; read -p "Press [Enter]...";;
+            *) print_error "Invalid option.";;
         esac
     done
 }
@@ -195,7 +195,7 @@ main_menu() {
             2) main_bot_menu ;;
             3) update_manager; exit 0 ;;
             0) echo "Exiting."; exit 0 ;;
-            *) print_error "Invalid option."; echo; read -p "Press [Enter]...";;
+            *) print_error "Invalid option.";;
         esac
     done
 }
