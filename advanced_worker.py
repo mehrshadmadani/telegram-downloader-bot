@@ -20,12 +20,11 @@ from config import (TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_PHONE,
                     GROUP_ID, ORDER_TOPIC_ID, MAJID_API_TOKEN,
                     INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD, NESTCODE_API_KEY)
 
-# --- سیستم لاگ‌گیری پیشرفته ---
+# --- سیستم لاگ‌گیری ---
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - [%(funcName)s] - %(message)s')
-if logger.hasHandlers():
-    logger.handlers.clear()
+if logger.hasHandlers(): logger.handlers.clear()
 stream_handler = logging.StreamHandler()
 stream_handler.setFormatter(formatter)
 logger.addHandler(stream_handler)
@@ -53,8 +52,7 @@ class TelethonWorker:
         try:
             client = InstagrapiClient()
             session_file = f"instagrapi_session_{INSTAGRAM_USERNAME}.json"
-            if os.path.exists(session_file):
-                client.load_settings(session_file)
+            if os.path.exists(session_file): client.load_settings(session_file)
             client.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
             client.dump_settings(session_file)
             logger.info("✅ Instagrapi session loaded/created successfully.")
@@ -82,10 +80,10 @@ class TelethonWorker:
         with requests.get(url, stream=True, timeout=300) as r:
             r.raise_for_status()
             with open(file_path, 'wb') as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    f.write(chunk)
+                for chunk in r.iter_content(chunk_size=8192): f.write(chunk)
         return file_path
 
+    # --- توابع دانلودر آبشاری برای پست و ریلز ---
     def _try_instagrapi_post(self, url, code):
         logger.info(f"[{code}] Attempt 1: Instagrapi (Post/Reel)")
         if not self.instagrapi_client: raise Exception("Instagrapi client not logged in.")
@@ -176,46 +174,32 @@ class TelethonWorker:
                 logger.warning(f"⚠️ [{code}] Method {method_func.__name__} failed: {e}")
         return [], None, None
 
-    def download_instagram_story(self, url, code):
-        logger.info(f"[{code}] Starting Story/Highlight download with Instagrapi")
-        if not self.instagrapi_client: raise Exception("Instagrapi client not logged in.")
-        
-        media_pk = self.instagrapi_client.media_pk_from_url(url)
-        media_info = self.instagrapi_client.media_info(media_pk).dict()
-        caption = f"Story by @{media_info.get('user', {}).get('username', '')}"
-
-        dl_path, ext = None, ".jpg"
-        if media_info.get("media_type") == 2: # Video
-            dl_path, ext = self.instagrapi_client.video_download(media_pk, self.download_dir), ".mp4"
-        elif media_info.get("media_type") == 1: # Photo
-            dl_path, ext = self.instagrapi_client.photo_download(media_pk, self.download_dir), ".jpg"
-
-        if dl_path:
-            final_path = os.path.join(self.download_dir, f"{code}{ext}")
-            os.rename(dl_path, final_path)
-            logger.info(f"✅ [{code}] Successfully downloaded story using Instagrapi.")
-            return [final_path], caption, "Instagrapi Story"
+    def download_instagram_story_or_highlight(self, url, code):
+        # برای استوری و هایلایت، کتابخانه‌ها بهترین گزینه هستند و سپس API ها
+        methods = [self._try_instagrapi_post, self._try_instaloader_post, self._try_majidapi, self._try_nestcode_api]
+        for method_func in methods:
+            try:
+                file_paths, caption, method_name = method_func(url, code)
+                if file_paths:
+                    logger.info(f"✅ [{code}] Successfully downloaded story/highlight using {method_name}.")
+                    # کپشن استوری معمولا خالی است، یک کپشن پیشفرض میسازیم
+                    if not caption: caption = f"Story/Highlight content"
+                    return file_paths, caption, method_name
+            except Exception as e:
+                logger.warning(f"⚠️ [{code}] Method {method_func.__name__} failed: {e}")
         return [], None, None
 
     def download_instagram_profile(self, url, code):
         logger.info(f"[{code}] Starting profile info download")
         if not self.instagrapi_client: raise Exception("Instagrapi client not logged in.")
-        
         username = re.search(r'instagram\.com/([a-zA-Z0-9\._]+)', url).group(1)
         user_info = self.instagrapi_client.user_info_by_username(username).dict()
-        
         profile_pic_url = user_info.get('profile_pic_url_hd') or user_info.get('profile_pic_url')
         output_path = os.path.join(self.download_dir, f"{code}_profile.jpg")
         self._download_from_url(profile_pic_url, output_path)
-        
-        caption = (f"👤 **{user_info.get('full_name')}** (`@{user_info.get('username')}`)\n\n"
-                   f"**Bio:**\n{user_info.get('biography')}\n\n"
-                   f"----------------------------------------\n"
-                   f"**Posts:** {user_info.get('media_count')} | "
-                   f"**Followers:** {user_info.get('follower_count')} | "
-                   f"**Following:** {user_info.get('following_count')}")
-        logger.info(f"✅ [{code}] Successfully fetched profile info using Instagrapi.")
-        return [output_path], caption, "Instagrapi Profile"
+        caption = user_info.get('username', '')
+        logger.info(f"✅ [{code}] Successfully fetched profile pic. Username: {caption}")
+        return [output_path], caption, "Instagram Profile"
 
     def yt_dlp_progress_hook(self, d, code):
         if d['status'] == 'downloading':
@@ -294,11 +278,10 @@ class TelethonWorker:
             if "instagram.com" in url_lower:
                 if "/stories/highlights/" in url_lower or "/s/" in url_lower:
                     self.active_jobs[code]["status"] = "Downloading (Insta Highlight)..."
-                    # Note: Using story downloader for highlights
-                    file_paths, caption_text, method = await asyncio.to_thread(self.download_instagram_story, url, code)
+                    file_paths, caption_text, method = await asyncio.to_thread(self.download_instagram_story_or_highlight, url, code)
                 elif "/stories/" in url_lower:
                     self.active_jobs[code]["status"] = "Downloading (Insta Story)..."
-                    file_paths, caption_text, method = await asyncio.to_thread(self.download_instagram_story, url, code)
+                    file_paths, caption_text, method = await asyncio.to_thread(self.download_instagram_story_or_highlight, url, code)
                 elif "/p/" in url_lower or "/reel/" in url_lower:
                     self.active_jobs[code]["status"] = "Downloading (Insta Post)..."
                     file_paths, caption_text, method = await asyncio.to_thread(self.download_instagram_post, url, code)
