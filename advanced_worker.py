@@ -14,7 +14,6 @@ from config import (TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_PHONE,
                     GROUP_ID, ORDER_TOPIC_ID, MAJID_API_TOKEN, 
                     INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD, NESTCODE_API_KEY)
 
-# ... (بخش لاگ و کلاس TelethonWorker تا تابع download_media بدون تغییر) ...
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 logging.getLogger("telethon").setLevel(logging.WARNING)
@@ -33,7 +32,7 @@ class TelethonWorker:
             self.instagrapi_client.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
             logger.info("All Instagram sessions loaded successfully.")
         except Exception as e:
-            logger.error(f"Session loading failed, will attempt fresh login: {e}")
+            logger.error(f"Session loading failed, attempting fresh login: {e}")
             self.setup_instagram_sessions()
 
     def setup_instagram_sessions(self):
@@ -56,7 +55,6 @@ class TelethonWorker:
         self.active_jobs[code] = {"user_id": user_id, "status": "Downloading..."}
         
         if "instagram.com" in url:
-            # 1. تلاش با API MajidAPI
             try:
                 logger.info(f"Attempt 1 (MajidAPI) for CODE: {code}")
                 api_url = f"https://api.majidapi.ir/instagram/download?url={url}&out=url&token={MAJID_API_TOKEN}"
@@ -71,7 +69,6 @@ class TelethonWorker:
                         self.active_jobs[code]["status"] = "Downloaded"; return output_path
             except Exception as e: logger.warning(f"MajidAPI failed for {code}: {e}")
 
-            # 2. تلاش با instagrapi
             try:
                 logger.info(f"Attempt 2 (instagrapi) for CODE: {code}")
                 media_pk = self.instagrapi_client.media_pk_from_url(url); media_info = self.instagrapi_client.media_info(media_pk).dict()
@@ -84,7 +81,6 @@ class TelethonWorker:
                     self.active_jobs[code]["status"] = "Downloaded"; return final_path
             except Exception as e: logger.warning(f"instagrapi failed for {code}: {e}")
             
-            # 3. تلاش با instaloader
             try:
                 logger.info(f"Attempt 3 (instaloader) for CODE: {code}")
                 shortcode = url.split('/')[-2]; post = instaloader.Post.from_shortcode(self.instaloader_client.context, shortcode)
@@ -99,7 +95,6 @@ class TelethonWorker:
                         self.active_jobs[code]["status"] = "Downloaded"; return final_path
             except Exception as e: logger.warning(f"Instaloader failed for {code}: {e}")
             
-            # 4. تلاش با yt-dlp
             try:
                 logger.info(f"Attempt 4 (yt-dlp) for CODE: {code}")
                 output_path_yt = os.path.join(self.download_dir, f"{code} - %(title).30s.%(ext)s")
@@ -110,7 +105,6 @@ class TelethonWorker:
                         if f.startswith(code): self.active_jobs[code]["status"] = "Downloaded"; return os.path.join(self.download_dir, f)
             except Exception as e: logger.warning(f"yt-dlp failed for {code}: {e}")
 
-            # 5. تلاش نهایی با NestCode API
             try:
                 logger.info(f"Final Attempt (NestCode API) for CODE: {code}")
                 api_url = f"https://open.nestcode.org/apis-1/InstagramDownloader?url={url}&key={NESTCODE_API_KEY}"
@@ -124,10 +118,7 @@ class TelethonWorker:
                             for chunk in media_res.iter_content(chunk_size=8192): f.write(chunk)
                         self.active_jobs[code]["status"] = "Downloaded"; return output_path
             except Exception as e: logger.error(f"All methods failed. Last error from NestCode API: {e}")
-
-        # --- منطق دانلود برای پلتفرم‌های دیگر ---
         else:
-            # ... (کد yt-dlp برای یوتیوب، ساندکلود و ... بدون تغییر) ...
             logger.info(f"Using yt-dlp for {url.split('/')[2]} CODE: {code}")
             output_path = os.path.join(self.download_dir, f"{code} - %(title).30s.%(ext)s")
             base_opts = {'outtmpl': output_path, 'cookiefile': 'cookies.txt', 'ignoreerrors': True, 'quiet': True, 'no_warnings': True, 'socket_timeout': 1800}
@@ -140,14 +131,14 @@ class TelethonWorker:
                     for f in os.listdir(self.download_dir):
                         if f.startswith(code): return os.path.join(self.download_dir, f)
             except Exception as e: logger.error(f"yt-dlp failed for CODE {code}: {e}")
-
+        
         self.active_jobs[code]["status"] = "Download Failed"; return None
 
-    # ... (بقیه توابع کلاس بدون تغییر) ...
     async def upload_progress(self, sent_bytes, total_bytes, code):
         percentage = int(sent_bytes * 100 / total_bytes);
         if percentage % 10 == 0 or percentage == 100:
             if code in self.active_jobs: self.active_jobs[code]["status"] = f"Uploading: {percentage}%"
+
     async def process_job(self, message):
         if message.id in self.processed_ids: return
         self.processed_ids.add(message.id)
@@ -170,11 +161,47 @@ class TelethonWorker:
             except: self.active_jobs[code]["status"] = "Upload Failed"
             finally:
                 if os.path.exists(file_path): os.remove(file_path)
+
     async def display_dashboard(self):
         while True:
-            os.system('clear' if os.name == 'posix' else 'cls'); print("--- 🚀 Advanced Downloader Dashboard 🚀 ---")
-            print(f"{'Job Code':<12} | {'User ID':<12} | {'Status':<20}"); print("-" * 50)
-            if not self.active_jobs: print("... Waiting for new jobs ...")
+            os.system('clear' if os.name == 'posix' else 'cls')
+            print("--- 🚀 Advanced Downloader Dashboard 🚀 ---")
+            print(f"{'Job Code':<12} | {'User ID':<12} | {'Status':<20}")
+            print("-" * 50)
+            if not self.active_jobs:
+                print("... Waiting for new jobs ...")
             else:
                 for code, data in list(self.active_jobs.items()):
-                    print(f"{code:<12} | {data.get('user_id', 'N/A'):
+                    # این خط اصلاح شده است
+                    print(f"{code:<12} | {data.get('user_id', 'N/A'):<12} | {data.get('status', 'N/A'):<20}")
+                    if data.get('status') in ["Completed", "Download Failed", "Upload Failed"]:
+                        await asyncio.sleep(3)
+                        self.active_jobs.pop(code, None)
+            print("-" * 50)
+            print(f"Last Update: {datetime.now().strftime('%H:%M:%S')}")
+            await asyncio.sleep(1)
+
+    async def run(self):
+        await self.app.start(phone=self.phone)
+        me = await self.app.get_me()
+        logger.info(f"Worker (Ultimate Version) ba movaffaghiat be onvane {me.first_name} vared shod.")
+        target_chat_id = GROUP_ID; target_topic_id = ORDER_TOPIC_ID
+        try: entity = await self.app.get_entity(target_chat_id)
+        except Exception as e: logger.critical(f"Nemitavan be Group ID dastresi peyda kard. Khata: {e}"); return
+        dashboard_task = asyncio.create_task(self.display_dashboard())
+        logger.info(f"Worker shoroo be check kardan Topic ID {target_topic_id} kard...")
+        while True:
+            try:
+                async for message in self.app.iter_messages(entity=entity, reply_to=target_topic_id, limit=20):
+                    if message.date < self.start_time: break
+                    if message.text and "⬇️ NEW JOB" in message.text:
+                        asyncio.create_task(self.process_job(message))
+                await asyncio.sleep(10)
+            except Exception as e: logger.error(f"Yek khata dar halghe asli rokh dad: {e}"); await asyncio.sleep(30)
+async def main():
+    worker = TelethonWorker(api_id=TELEGRAM_API_ID, api_hash=TELEGRAM_API_HASH, phone=TELEGRAM_PHONE)
+    await worker.run()
+
+if __name__ == "__main__":
+    print("--- Rah andazi Ultimate Worker ---")
+    asyncio.run(main())
