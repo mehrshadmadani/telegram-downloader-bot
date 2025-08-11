@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # =============================================================
-#         Coka Bot Manager - Universal Smart Installer v26.0 (Full Management)
+#         Coka Bot Manager - Universal Smart Installer v27.0 (View Requirements)
 # =============================================================
 
 COKA_SCRIPT_PATH="/usr/local/bin/coka"
@@ -39,7 +39,7 @@ if [ -f "$COKA_SCRIPT_PATH" ]; then
     fi
 else
     LATEST_VERSION=$(curl -sL "$VERSION_URL" | head -n 1)
-    if [ -z "$LATEST_VERSION" ]; then LATEST_VERSION="26.0 (Full Management)"; fi
+    if [ -z "$LATEST_VERSION" ]; then LATEST_VERSION="27.0 (View Reqs)"; fi
 fi
 
 # --- Interactive Setup ---
@@ -61,9 +61,9 @@ cat > "$COKA_SCRIPT_PATH" << EOF
 VERSION="$LATEST_VERSION"
 BOT_DIR="$BOT_DIR"
 MANAGER_SCRIPT_URL="$MANAGER_URL"
+REQS_SCRIPT_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/requirements.txt"
 WORKER_SCRIPT_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/advanced_worker.py"
 MAIN_BOT_SCRIPT_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/main_bot.py"
-REQS_SCRIPT_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/requirements.txt"
 WORKER_SCREEN_NAME="worker_session"
 MAIN_BOT_SCREEN_NAME="main_bot_session"
 
@@ -111,7 +111,9 @@ update_script() {
     curl -s -L "\$script_url" -o "\$file_path"
     if [ \$? -eq 0 ]; then
         print_success "\$service_name script updated successfully."
-        print_warning "Restart the service to apply changes: 'coka restart \$service_name'"
+        if [[ "\$service_name" == "worker" ]] || [[ "\$service_name" == "main" ]]; then
+            print_warning "Restart the service to apply changes: 'coka restart \$service_name'"
+        fi
     else
         print_error "Failed to download update for \$service_name."
     fi
@@ -141,12 +143,11 @@ setup_requirements_cron() {
     CRON_COMMAND="cd \$BOT_DIR && source venv/bin/activate && pip install -r requirements.txt --upgrade"
     
     if [ -f "\$CRON_FILE" ]; then
-        print_warning "Cron job already exists. Removing it first."
-        rm -f "\$CRON_FILE"
+        print_warning "Cron job already exists. It will be overwritten."
     fi
     
     print_info "Setting up a weekly cron job to update Python libraries..."
-    echo "0 3 * * 0 root \$CRON_COMMAND >> \$BOT_DIR/cron.log 2>&1" > "\$CRON_FILE"
+    echo "0 3 * * 0 root \$CRON_COMMAND >> \$BOT_DIR/cron.log 2>&1" | sudo tee "\$CRON_FILE" > /dev/null
     
     print_success "Cron job created successfully."
     print_info "Libraries will be updated automatically every Sunday at 3 AM."
@@ -156,7 +157,7 @@ setup_requirements_cron() {
 remove_requirements_cron() {
     CRON_FILE="/etc/cron.d/coka_requirements_update"
     if [ -f "\$CRON_FILE" ]; then
-        rm -f "\$CRON_FILE"
+        sudo rm -f "\$CRON_FILE"
         print_success "Cron job for requirements update has been removed."
     else
         print_error "No active cron job found to remove."
@@ -199,7 +200,7 @@ worker_menu() {
         case \$choice in
             1) start_service "worker" "\$WORKER_SCREEN_NAME" "advanced_worker.py";;
             2) stop_service "worker" "\$WORKER_SCREEN_NAME" ;;
-            3) screen -r "\$WORKER_SCREEN_NAME" ;;
+            3) print_warning "To detach, press Ctrl+A then D."; sleep 2; screen -r "\$WORKER_SCREEN_NAME" ;;
             4) tail -f bot.log ;;
             5) update_script "worker" "\$WORKER_SCRIPT_URL" "\$BOT_DIR/advanced_worker.py" ;;
             0) return ;;
@@ -236,16 +237,23 @@ requirements_menu() {
     while true; do
         show_panel_and_menu
         echo "  Requirements Manager Menu:"
-        echo "  [1] Update requirements.txt from GitHub"
-        echo "  [2] Setup Weekly Auto-Update (Cron Job)"
-        echo "  [3] Remove Auto-Update Cron Job"
+        echo "  [1] View current requirements.txt"
+        echo "  [2] Update requirements.txt from GitHub"
+        echo "  [3] Setup Weekly Auto-Update (Cron Job)"
+        echo "  [4] Remove Auto-Update Cron Job"
         echo "  [0] Back to Main Menu"
         echo -e "\e[2m----------------------------------------------------------\e[0m"
         read -p "  Enter your choice: " choice
         case \$choice in
-            1) update_script "requirements" "\$REQS_SCRIPT_URL" "\$BOT_DIR/requirements.txt" ;;
-            2) setup_requirements_cron ;;
-            3) remove_requirements_cron ;;
+            1)
+                print_info "Content of requirements.txt:"
+                echo "---------------------------------"
+                cat -n "\$BOT_DIR/requirements.txt"
+                echo "---------------------------------"
+                ;;
+            2) update_script "requirements" "\$REQS_SCRIPT_URL" "\$BOT_DIR/requirements.txt" ;;
+            3) setup_requirements_cron ;;
+            4) remove_requirements_cron ;;
             0) return ;;
             *) print_error "Invalid option." ;;
         esac
