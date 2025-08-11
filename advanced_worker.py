@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 import yt_dlp
 from telethon import TelegramClient
 from telethon.tl.types import DocumentAttributeVideo
-# --- وارد کردن توکن جدید از کانفیگ ---
 from config import (TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_PHONE, 
                     GROUP_ID, ORDER_TOPIC_ID, MAJID_API_TOKEN)
 
@@ -36,22 +35,21 @@ class TelethonWorker:
     def download_media(self, url, code, user_id):
         self.active_jobs[code] = {"user_id": user_id, "status": "Downloading..."}
         
+        # --- منطق دانلود هیبریدی برای اینستاگرام ---
         if "instagram.com" in url:
+            # تلاش اول: با API سریع
+            logger.info(f"Trying API download for Instagram CODE: {code}")
             try:
-                # --- استفاده از توکن جدید از فایل کانفیگ ---
                 api_url = f"https://api.majidapi.ir/instagram/download?url={url}&out=url&token={MAJID_API_TOKEN}"
-                
-                api_response = requests.get(api_url, timeout=30)
+                api_response = requests.get(api_url, timeout=20)
                 api_response.raise_for_status()
                 data = api_response.json()
-                
                 media_url = None
                 if data.get("status") == 200:
                     result = data.get("result", {})
                     if result.get("video"): media_url = result["video"]
                     elif result.get("image"): media_url = result["image"]
-                    elif isinstance(result, list) and result and result[0].get("media"): media_url = result[0]["media"]
-
+                
                 if media_url:
                     file_extension = ".jpg" if ".jpg" in media_url.split('?')[0] else ".mp4"
                     output_path = os.path.join(self.download_dir, f"{code}{file_extension}")
@@ -61,26 +59,29 @@ class TelethonWorker:
                         for chunk in media_response.iter_content(chunk_size=8192): f.write(chunk)
                     self.active_jobs[code]["status"] = "Downloaded"
                     return output_path
-                else:
-                    raise Exception(f"API Error: Media URL not found in response. API Message: {data.get('message')}")
-
             except Exception as e:
-                logger.error(f"Khata dar download Instagram (API) baraye CODE {code}: {e}")
-                self.active_jobs[code]["status"] = "Download Failed"
-                return None
+                logger.warning(f"API download failed for {code}: {e}. Falling back to yt-dlp.")
         
-        # --- منطق قبلی برای بقیه پلتفرم‌ها ---
+        # --- تلاش دوم (Fallback) یا دانلود برای پلتفرم‌های دیگر ---
+        logger.info(f"Using yt-dlp for CODE: {code}")
         output_path = os.path.join(self.download_dir, f"{code} - %(title).30s.%(ext)s")
-        if "soundcloud.com" in url or "spotify" in url: ydl_opts = {'outtmpl': output_path, 'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None, 'format': 'bestaudio/best', 'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3'}]}
-        else: ydl_opts = {'outtmpl': output_path, 'format': 'bestvideo[height<=720]+bestaudio/best[height<=720]/best', 'merge_output_format': 'mp4', 'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None}
+        if "instagram.com" in url or "soundcloud.com" in url or "spotify" in url:
+             ydl_opts = {'outtmpl': output_path, 'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None, 'format': 'bestaudio/best' if "soundcloud" in url or "spotify" in url else 'best', 'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3'}] if "soundcloud" in url or "spotify" in url else []}
+        else: # YouTube
+            ydl_opts = {'outtmpl': output_path, 'format': 'bestvideo[height<=720]+bestaudio/best[height<=720]/best', 'merge_output_format': 'mp4', 'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None}
+        
         ydl_opts.update({'ignoreerrors': True, 'quiet': True, 'no_warnings': True})
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url])
                 for f in os.listdir(self.download_dir):
-                    if f.startswith(code): downloaded_file = os.path.join(self.download_dir, f); self.active_jobs[code]["status"] = "Downloaded"; return downloaded_file
+                    if f.startswith(code):
+                        downloaded_file = os.path.join(self.download_dir, f)
+                        self.active_jobs[code]["status"] = "Downloaded"; return downloaded_file
             return None
-        except: self.active_jobs[code]["status"] = "Download Failed"; return None
+        except Exception as e:
+            logger.error(f"yt-dlp download failed for CODE {code}: {e}")
+            self.active_jobs[code]["status"] = "Download Failed"; return None
     
     # ... (بقیه توابع کلاس بدون تغییر باقی می‌مانند) ...
     async def upload_progress(self, sent_bytes, total_bytes, code):
@@ -123,7 +124,7 @@ class TelethonWorker:
     async def run(self):
         await self.app.start(phone=self.phone)
         me = await self.app.get_me()
-        logger.info(f"Worker (Pro Uploader) ba movaffaghiat be onvane {me.first_name} vared shod.")
+        logger.info(f"Worker (Hybrid) ba movaffaghiat be onvane {me.first_name} vared shod.")
         target_chat_id = GROUP_ID; target_topic_id = ORDER_TOPIC_ID
         try: entity = await self.app.get_entity(target_chat_id)
         except Exception as e: logger.critical(f"Nemitavan be Group ID dastresi peyda kard. Khata: {e}"); return
@@ -140,4 +141,4 @@ class TelethonWorker:
 async def main():
     worker = TelethonWorker(api_id=TELEGRAM_API_ID, api_hash=TELEGRAM_API_HASH, phone=TELEGRAM_PHONE); await worker.run()
 if __name__ == "__main__":
-    print("--- Rah andazi Pro Uploader Worker ---"); asyncio.run(main())
+    print("--- Rah andazi Hybrid Worker ---"); asyncio.run(main())
