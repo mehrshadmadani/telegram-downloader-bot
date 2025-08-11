@@ -209,6 +209,7 @@ smart_update_config() {
     ADDED_COUNT=0
     for var in \$missing_vars; do
         print_info "New variable found: '\$var'. Adding to config.py..."
+        # This awk command finds the block for the variable and adds it
         awk -v var="^\$var\s*=" '/\s*# ---.*---/,/^\s*\$/ { if (\$0 ~ var) p=1; if (p) print; if (p && \$0 ~ /^\s*\$/) p=0 }' "\$TEMP_CONFIG" >> "\$LOCAL_CONFIG"
         echo "" >> "\$LOCAL_CONFIG"
         ADDED_COUNT=\$((ADDED_COUNT + 1))
@@ -228,8 +229,9 @@ quick_update_config() {
     
     nano "\$TEMP_CONFIG"
     
-    if [ ! -s "\$TEMP_CONFIG" ]; then
-        print_error "Temporary file is empty. Aborting."
+    # Check if the user saved an empty file
+    if [ \$(grep -cv '^#' "\$TEMP_CONFIG") -lt 2 ]; then
+        print_error "Temporary file seems empty or contains only comments. Aborting."
         rm -f "\$TEMP_CONFIG"
         return
     fi
