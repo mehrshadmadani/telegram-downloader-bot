@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # =============================================================
-#         Coka Bot Manager - Universal Smart Installer v28.0 (Cookie Manager)
+#         Coka Bot Manager - Universal Smart Installer v29.0 (Final Stable)
 # =============================================================
 
 COKA_SCRIPT_PATH="/usr/local/bin/coka"
@@ -24,6 +24,8 @@ DEFAULT_MANAGER_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-d
 
 if [ -f "$COKA_SCRIPT_PATH" ]; then
     print_warning "'coka' command is already installed."
+    
+    print_info "Fetching latest version info from GitHub..."
     LATEST_VERSION=$(curl -sL "$VERSION_URL" | head -n 1)
     if [ -z "$LATEST_VERSION" ]; then LATEST_VERSION="N/A"; fi
     
@@ -39,7 +41,7 @@ if [ -f "$COKA_SCRIPT_PATH" ]; then
     fi
 else
     LATEST_VERSION=$(curl -sL "$VERSION_URL" | head -n 1)
-    if [ -z "$LATEST_VERSION" ]; then LATEST_VERSION="28.0 (Cookie Manager)"; fi
+    if [ -z "$LATEST_VERSION" ]; then LATEST_VERSION="29.0 (Final Stable)"; fi
 fi
 
 # --- Interactive Setup ---
@@ -64,6 +66,7 @@ MANAGER_SCRIPT_URL="$MANAGER_URL"
 REQS_SCRIPT_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/requirements.txt"
 WORKER_SCRIPT_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/advanced_worker.py"
 MAIN_BOT_SCRIPT_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/main_bot.py"
+VERSION_URL="https://raw.githubusercontent.com/mehrshadmadani/telegram-downloader-bot/main/version.txt"
 WORKER_SCREEN_NAME="worker_session"
 MAIN_BOT_SCREEN_NAME="main_bot_session"
 
@@ -120,12 +123,25 @@ update_script() {
 }
 
 update_manager() {
-    print_warning "This will update the 'coka' script to the latest version from GitHub."
-    read -p "Are you sure you want to continue? (y/n): " UPDATE_CONFIRM
+    print_info "Checking for new version from GitHub..."
+    LATEST_VERSION=\$(curl -sL "\$VERSION_URL" | head -n 1)
+    if [ -z "\$LATEST_VERSION" ]; then
+        print_error "Could not fetch latest version info."
+        return
+    fi
+    
+    if [ "\$VERSION" == "\$LATEST_VERSION" ]; then
+        print_success "You are already on the latest version (v\$VERSION)."
+        return
+    fi
+
+    print_warning "A new version is available: v\$LATEST_VERSION"
+    read -p "Do you want to update from v\$VERSION to v\$LATEST_VERSION? (y/n): " UPDATE_CONFIRM
     if [[ "\$UPDATE_CONFIRM" != "y" ]]; then
         print_info "Update cancelled."
         return
     fi
+
     print_info "Updating 'coka' manager script itself..."
     curl -s -L "\$MANAGER_SCRIPT_URL" | sudo bash
     if [ \$? -eq 0 ]; then
@@ -165,6 +181,13 @@ remove_requirements_cron() {
 }
 
 clear_and_prepare_cookies() {
+    print_warning "This will permanently delete all content in cookies.txt."
+    read -p "Are you sure you want to continue? (y/n): " confirm
+    if [[ "\$confirm" != "y" ]]; then
+        print_info "Operation cancelled."
+        return
+    fi
+
     print_info "Clearing cookies.txt and preparing for new content..."
     echo "# Netscape HTTP Cookie File" > "\$BOT_DIR/cookies.txt"
     echo "# Paste your new cookies below this line." >> "\$BOT_DIR/cookies.txt"
