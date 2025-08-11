@@ -1,4 +1,4 @@
-import os  # <--- این خط اضافه شد
+import os
 import psycopg2
 import random
 import string
@@ -6,6 +6,7 @@ import base64
 import re
 import logging
 from functools import wraps
+from datetime import datetime, timedelta
 import yt_dlp
 from instagrapi import Client as InstagrapiClient
 
@@ -13,15 +14,18 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes, CallbackQueryHandler
 from telegram.constants import ChatMemberStatus
 from telegram.error import BadRequest
-from config import (BOT_TOKEN, GROUP_ID, DB_NAME, DB_USER, DB_PASS, DB_HOST, DB_PORT, 
+from config import (BOT_TOKEN, GROUP_ID, DB_NAME, DB_USER, DB_PASS, DB_HOST, DB_PORT,
                     ORDER_TOPIC_ID, LOG_TOPIC_ID, ADMIN_IDS, FORCED_JOIN_CHANNELS,
-                    INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
+                    INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD,
+                    BUTTON_TEXT, BUTTON_URL, FOOTER_TEXT, USER_COOLDOWN_SECONDS,
+                    START_MESSAGE, SUBMIT_MESSAGE, FAILURE_MESSAGE)
 
 # --- سیستم لاگ‌گیری ---
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - [%(funcName)s] - %(message)s')
-if logger.hasHandlers(): logger.handlers.clear()
+if logger.hasHandlers():
+    logger.handlers.clear()
 stream_handler = logging.StreamHandler()
 stream_handler.setFormatter(formatter)
 logger.addHandler(stream_handler)
@@ -56,7 +60,6 @@ class PostgresDB:
                 cur.execute("INSERT INTO jobs (code, user_id, url) VALUES (%s, %s, %s);", (code, user_id, url))
 
     def get_job_by_code(self, code):
-        """اطلاعات کامل یک کار را با استفاده از کد آن برمی‌گرداند."""
         with self.get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT user_id, url FROM jobs WHERE code = %s;", (code,))
@@ -124,7 +127,6 @@ class AdvancedBot:
         self.instagrapi_client = self.setup_instagrapi_client()
 
     def setup_instagrapi_client(self):
-        """کلاینت اینستاگرام را برای ربات اصلی راه‌اندازی می‌کند."""
         try:
             client = InstagrapiClient()
             session_file = f"main_bot_instagrapi_session.json"
@@ -146,7 +148,7 @@ class AdvancedBot:
             username = f"@{user.username}" if user.username else "ندارد"
             log_message = (f"🎉 کاربر جدید\n\nنام: {user.first_name}\nنام کاربری: {username}\nآیدی: [{user.id}](tg://user?id={user.id})")
             await context.bot.send_message(chat_id=self.group_id, text=log_message, message_thread_id=self.log_topic_id, parse_mode='Markdown')
-        await update.message.reply_text("✅ خوش آمدید!\n\nمی‌توانید لینک خود را ارسال کنید.")
+        await update.message.reply_text(START_MESSAGE)
 
     async def manage_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.effective_user.id not in self.admin_ids: return
@@ -164,13 +166,42 @@ class AdvancedBot:
     @membership_required
     async def handle_url(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
+        
+        if user.id not in self.admin_ids:
+            now = datetime.now()
+            last_request_time = context.user_data.get('last_request_time')
+            cooldown = timedelta(seconds=USER_COOLDOWN_SECONDS)
+
+            if last_request_time and (now - last_request_time) < cooldown:
+                remaining_time = cooldown - (now - last_request_time)
+                await update.message.reply_text(f"⏳ برای ارسال لینک بعدی، لطفاً **{int(remaining_time.total_seconds()) + 1}** ثانیه دیگر صبر کنید.", parse_mode='Markdown')
+                return
+
+            context.user_data['last_request_time'] = now
+
         self.db.add_user_if_not_exists(user)
         url = update.message.text.strip()
         code = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
         self.db.add_job(code, user.id, url)
         message_for_worker = f"⬇️ NEW JOB\nURL: {url}\nCODE: {code}\nUSER_ID: {user.id}"
         await context.bot.send_message(chat_id=self.group_id, text=message_for_worker, message_thread_id=self.order_topic_id)
-        await update.message.reply_text(f"✅ **درخواست ثبت شد!**\n\n🏷️ **کد پیگیری:** `{code}`", parse_mode='Markdown')
+        
+        submit_text = SUBMIT_MESSAGE.format(code=code)
+        await update.message.reply_text(submit_text, parse_mode='Markdown')
+
+    async def handle_failed_job(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not update.message or not update.message.text or update.message.message_thread_id != self.order_topic_id:
+            return
+        try:
+            lines = update.message.text.split('\n')
+            code = next(l.split(":", 1)[1].strip() for l in lines if l.startswith("CODE:"))
+            job_info = self.db.get_job_by_code(code)
+            if job_info and job_info.get('user_id'):
+                user_id = job_info['user_id']
+                logger.info(f"Notifying user {user_id} about failed job {code}.")
+                await context.bot.send_message(chat_id=user_id, text=FAILURE_MESSAGE)
+        except Exception as e:
+            logger.error(f"Error in handle_failed_job: {e}")
 
     async def handle_group_files(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not update.message or not update.message.caption or update.message.message_thread_id != self.order_topic_id:
@@ -188,12 +219,16 @@ class AdvancedBot:
             user_id, original_url = job_info['user_id'], job_info['url']
             self.db.update_job_on_complete(code, 'completed', size)
 
-            footer = ("\n\n—————————————————\n"
-                      "🍭 Download by [CokaDownloader](https://t.me/parsvip0_bot?start=0)")
+            footer = f"\n\n{FOOTER_TEXT}"
             
             async def send_media_to_user(media_type, file_id, caption_text):
+                reply_markup = None
+                if BUTTON_TEXT and BUTTON_URL:
+                    keyboard = [[InlineKeyboardButton(BUTTON_TEXT, url=BUTTON_URL)]]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+                
                 actions = {'video': context.bot.send_video, 'audio': context.bot.send_audio, 'photo': context.bot.send_photo, 'document': context.bot.send_document}
-                kwargs = {'chat_id': user_id, media_type: file_id, 'caption': caption_text, 'parse_mode': 'Markdown'}
+                kwargs = {'chat_id': user_id, media_type: file_id, 'caption': caption_text, 'parse_mode': 'Markdown', 'reply_markup': reply_markup}
                 if media_type: await actions[media_type](**kwargs)
             
             media_type = next((mt for mt in ['video', 'audio', 'photo', 'document'] if getattr(update.message, mt)), None)
@@ -248,6 +283,7 @@ class AdvancedBot:
         self.app.add_handler(CallbackQueryHandler(self.check_membership_callback, pattern="^check_membership$"))
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_url))
         self.app.add_handler(MessageHandler((filters.VIDEO | filters.AUDIO | filters.PHOTO | filters.Document.ALL) & filters.Chat(self.group_id) & filters.CAPTION, self.handle_group_files))
+        self.app.add_handler(MessageHandler(filters.TEXT & filters.Chat(self.group_id) & filters.Regex(r"^❌ JOB FAILED"), self.handle_failed_job))
         logger.info("🚀 Main Bot is running...")
         self.app.run_polling()
 
