@@ -2,3 +2,4 @@ python-telegram-bot==21.0.1
 telethon
 yt-dlp
 psycopg2-binary
+requests
