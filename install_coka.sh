@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # =============================================================
-#         Coka Bot Manager - Universal Smart Installer v33.0 (Final Version)
+#         Coka Bot Manager - Universal Smart Installer v34.0 (Final Version)
 # =============================================================
 
 COKA_SCRIPT_PATH="/usr/local/bin/coka"
@@ -40,7 +40,7 @@ if [ -f "$COKA_SCRIPT_PATH" ]; then
     fi
 else
     LATEST_VERSION=$(curl -sL "$VERSION_URL?v=$(date +%s)" | head -n 1)
-    if [ -z "$LATEST_VERSION" ]; then LATEST_VERSION="33.0 (Final Version)"; fi
+    if [ -z "$LATEST_VERSION" ]; then LATEST_VERSION="34.0 (Final Version)"; fi
 fi
 
 # --- Interactive Setup ---
@@ -77,7 +77,6 @@ print_error() { echo -e "\e[31mERROR: \$1\e[0m"; }
 print_warning() { echo -e "\e[33mWARNING: \$1\e[0m"; }
 is_running() { screen -list | grep -q "\$1"; }
 
-# Function to safely read a variable from config.py
 get_config_value() {
     grep -oP "^\s*\$1\s*=\s*['\"]\K[^'\"]+" "\$BOT_DIR/config.py"
 }
@@ -104,7 +103,9 @@ stop_service() {
 }
 
 update_script() {
-    local service_name=\$1; local script_url=\$2; local file_path=\$3
+    local service_name=\$1
+    local script_url=\$2
+    local file_path=\$3
     print_warning "This will overwrite '\$file_path' with the latest version from GitHub."
     read -p "Are you sure? (y/n): " confirm
     if [[ "\$confirm" != "y" ]]; then print_info "Update for \$service_name cancelled."; return; fi
@@ -203,10 +204,10 @@ install_database() {
     print_success "Database installed and configured."
 }
 
-show_db_users() {
-    print_info "Users in database..."
+show_db_tables() {
+    print_info "Tables in database..."
     DB_NAME=\$(get_config_value "DB_NAME"); DB_USER=\$(get_config_value "DB_USER"); DB_PASS=\$(get_config_value "DB_PASS"); DB_HOST=\$(get_config_value "DB_HOST")
-    export PGPASSWORD=\$DB_PASS; psql -U "\$DB_USER" -d "\$DB_NAME" -h "\$DB_HOST" -c "SELECT user_id, first_name, username FROM users ORDER BY join_date DESC LIMIT 20;"; export PGPASSWORD=""
+    export PGPASSWORD=\$DB_PASS; psql -U "\$DB_USER" -d "\$DB_NAME" -h "\$DB_HOST" -c "\dt"; export PGPASSWORD=""
 }
 
 restore_db_from_backup() {
