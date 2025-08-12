@@ -14,7 +14,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes, CallbackQueryHandler
 from telegram.constants import ChatMemberStatus
 from telegram.error import BadRequest
-from config import (BOT_TOKEN, BACKUP_BOT_TOKEN, GROUP_ID, DB_NAME, DB_USER, DB_PASS, DB_HOST, DB_PORT,
+from config import (BOT_TOKEN, BACKUP_BOT_TOKEN, GROUP_ID, DB_NAME, DB_USER, DB_PASS, DB_HOST, DB_PORT, 
                     ORDER_TOPIC_ID, LOG_TOPIC_ID, ADMIN_IDS, FORCED_JOIN_CHANNELS,
                     INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD,
                     BUTTON_TEXT, BUTTON_URL, FOOTER_TEXT, USER_COOLDOWN_SECONDS,
