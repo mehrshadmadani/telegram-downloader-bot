@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # =============================================================
-#         Coka Bot Manager - Universal Smart Installer v33.0 (DB Fix)
+#         Coka Bot Manager - Universal Smart Installer v34.0 (Full Control)
 # =============================================================
 
 COKA_SCRIPT_PATH="/usr/local/bin/coka"
@@ -40,7 +40,7 @@ if [ -f "$COKA_SCRIPT_PATH" ]; then
     fi
 else
     LATEST_VERSION=$(curl -sL "$VERSION_URL?v=$(date +%s)" | head -n 1)
-    if [ -z "$LATEST_VERSION" ]; then LATEST_VERSION="33.0 (DB Fix)"; fi
+    if [ -z "$LATEST_VERSION" ]; then LATEST_VERSION="34.0 (Full Control)"; fi
 fi
 
 # --- Interactive Setup ---
@@ -77,7 +77,6 @@ print_error() { echo -e "\e[31mERROR: \$1\e[0m"; }
 print_warning() { echo -e "\e[33mWARNING: \$1\e[0m"; }
 is_running() { screen -list | grep -q "\$1"; }
 
-# Function to safely read a variable from config.py
 get_config_value() {
     grep -oP "^\s*\$1\s*=\s*['\"]\K[^'\"]+" "\$BOT_DIR/config.py"
 }
@@ -156,7 +155,7 @@ remove_requirements_cron() {
 
 clear_and_prepare_cookies() {
     print_warning "This will permanently delete all content in cookies.txt."
-    read -p "Are you sure you want to continue? (y/n): " confirm
+    read -p "Are you sure? (y/n): " confirm
     if [[ "\$confirm" != "y" ]]; then print_info "Operation cancelled."; return; fi
     print_info "Clearing cookies.txt..."; echo "# Netscape HTTP Cookie File" > "\$BOT_DIR/cookies.txt"; echo "# Paste new cookies here." >> "\$BOT_DIR/cookies.txt"
     print_success "cookies.txt is now clean and ready."
@@ -205,13 +204,8 @@ install_database() {
 
 show_db_users() {
     print_info "Showing last 20 users from database..."
-    DB_NAME=\$(get_config_value "DB_NAME")
-    DB_USER=\$(get_config_value "DB_USER")
-    DB_PASS=\$(get_config_value "DB_PASS")
-    DB_HOST=\$(get_config_value "DB_HOST")
-    export PGPASSWORD=\$DB_PASS
-    psql -U "\$DB_USER" -d "\$DB_NAME" -h "\$DB_HOST" -c "SELECT user_id, first_name, username FROM users ORDER BY join_date DESC LIMIT 20;"
-    export PGPASSWORD=""
+    DB_NAME=\$(get_config_value "DB_NAME"); DB_USER=\$(get_config_value "DB_USER"); DB_PASS=\$(get_config_value "DB_PASS"); DB_HOST=\$(get_config_value "DB_HOST")
+    export PGPASSWORD=\$DB_PASS; psql -U "\$DB_USER" -d "\$DB_NAME" -h "\$DB_HOST" -c "SELECT user_id, first_name, username FROM users ORDER BY join_date DESC LIMIT 20;"; export PGPASSWORD=""
 }
 
 restore_db_from_backup() {
@@ -229,6 +223,36 @@ restore_db_from_backup() {
     psql -U "\$DB_USER" -d "\$DB_NAME" -h "\$DB_HOST" < "\$backup_file"
     export PGPASSWORD=""
     if [ \$? -eq 0 ]; then print_success "Database restored."; else print_error "Error during restore."; fi
+}
+
+delete_database_data() {
+    print_error "!!! WARNING !!! This will permanently delete ALL users and jobs from the database."
+    read -p "This cannot be undone. Are you sure? (y/n): " confirm
+    if [[ "\$confirm" != "y" ]]; then print_info "Operation cancelled."; return; fi
+    print_info "Deleting and recreating tables..."
+    DB_NAME=\$(get_config_value "DB_NAME"); DB_USER=\$(get_config_value "DB_USER"); DB_PASS=\$(get_config_value "DB_PASS"); DB_HOST=\$(get_config_value "DB_HOST")
+    export PGPASSWORD=\$DB_PASS
+    psql -U "\$DB_USER" -d "\$DB_NAME" -h "\$DB_HOST" -c "DROP TABLE IF EXISTS jobs; DROP TABLE IF EXISTS users;"
+    psql -U "\$DB_USER" -d "\$DB_NAME" -h "\$DB_HOST" -c "CREATE TABLE users (user_id BIGINT PRIMARY KEY, first_name TEXT, username TEXT, join_date TIMESTAMP WITH TIME ZONE DEFAULT NOW());"
+    psql -U "\$DB_USER" -d "\$DB_NAME" -h "\$DB_HOST" -c "CREATE TABLE jobs (id SERIAL PRIMARY KEY, code TEXT UNIQUE NOT NULL, user_id BIGINT REFERENCES users(user_id), url TEXT NOT NULL, status TEXT DEFAULT 'pending', created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), completed_at TIMESTAMP WITH TIME ZONE, file_size BIGINT);"
+    export PGPASSWORD=""
+    print_success "Database tables have been wiped and recreated."
+}
+
+uninstall_postgresql() {
+    print_error "!!! EXTREME WARNING !!!"; print_error "This will completely UNINSTALL PostgreSQL and DELETE ALL DATABASES on this server."
+    read -p "This is a highly destructive action. Are you absolutely sure? (Type 'YES' to confirm): " confirm
+    if [[ "\$confirm" != "YES" ]]; then print_info "Operation cancelled."; return; fi
+    print_info "Stopping PostgreSQL service..."; systemctl stop postgresql
+    print_info "Purging PostgreSQL packages..."; apt-get purge -y postgresql postgresql-common postgresql-client; apt-get autoremove -y
+    print_success "PostgreSQL has been completely removed from the server."
+}
+
+uninstall_coka() {
+    print_warning "This will remove the 'coka' management script itself."
+    read -p "Are you sure? (y/n): " confirm
+    if [[ "\$confirm" != "y" ]]; then print_info "Operation cancelled."; return; fi
+    if rm -f /usr/local/bin/coka; then print_success "'coka' script has been uninstalled."; else print_error "Failed to remove 'coka' script."; fi
 }
 
 # --- UI Functions ---
@@ -300,9 +324,9 @@ config_menu() {
 
 database_menu() {
     while true; do
-        show_panel_and_menu; echo "  Database Manager:"; echo "  [1] Install PostgreSQL & Setup"; echo "  [2] Show Bot Users List"; echo "  [3] Restore from Backup"; echo "  [0] Back"
+        show_panel_and_menu; echo "  Database Manager:"; echo "  [1] Install PostgreSQL & Setup"; echo "  [2] Show Bot Users List"; echo "  [3] Restore from Backup"; echo "  [4] Delete Database Data"; echo "  [5] Uninstall PostgreSQL"; echo "  [0] Back"
         read -p "  Enter your choice: " choice
-        case \$choice in 1) install_database ;; 2) show_db_users ;; 3) restore_db_from_backup ;; 0) return ;; *) print_error "Invalid." ;; esac
+        case \$choice in 1) install_database ;; 2) show_db_users ;; 3) restore_db_from_backup ;; 4) delete_database_data ;; 5) uninstall_postgresql ;; 0) return ;; *) print_error "Invalid." ;; esac
         echo; read -p "Press [Enter] to continue..."
     done
 }
@@ -318,10 +342,11 @@ main_menu() {
         echo "  [5] Cookie Manager"
         echo "  [6] Config Manager"
         echo "  [7] Update This Manager (coka)"
+        echo "  [8] Uninstall coka"
         echo "  [0] Quit"
         echo -e "\e[2m-------------------------------------------------------------------------------\e[0m"
         read -p "  Enter your choice: " choice
-        case \$choice in 1) worker_menu ;; 2) main_bot_menu ;; 3) database_menu ;; 4) requirements_menu ;; 5) cookies_menu ;; 6) config_menu ;; 7) update_manager; ;; 0) echo "Exiting."; clear; exit 0 ;; *) print_error "Invalid option." ;; esac
+        case \$choice in 1) worker_menu ;; 2) main_bot_menu ;; 3) database_menu ;; 4) requirements_menu ;; 5) cookies_menu ;; 6) config_menu ;; 7) update_manager; ;; 8) uninstall_coka ;; 0) echo "Exiting."; clear; exit 0 ;; *) print_error "Invalid option." ;; esac
     done
 }
 
