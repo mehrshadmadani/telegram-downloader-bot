@@ -128,7 +128,7 @@ class TelethonWorker:
 
     def _try_yt_dlp_insta(self, url, code):
         logger.info(f"[{code}] Attempt 3: yt-dlp for Instagram")
-        return self.download_other_platforms(url, code, "best") # Use a default quality for insta fallback
+        return self.download_other_platforms(url, code, "best")
 
     def _try_majidapi(self, url, code):
         logger.info(f"[{code}] Attempt 4: MajidAPI")
@@ -236,6 +236,8 @@ class TelethonWorker:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl: info_dict = ydl.extract_info(url, download=True)
             downloaded_files = [os.path.join(self.download_dir, f) for f in os.listdir(self.download_dir) if f.startswith(code)]
             if not downloaded_files: raise Exception("yt-dlp finished but no files were found.")
+            
+            # For non-insta, caption is always title. Main bot will fetch description.
             caption = info_dict.get('title', '') if info_dict else ""
             return downloaded_files, caption, "yt-dlp"
         except Exception as e:
@@ -263,13 +265,19 @@ class TelethonWorker:
                 metadata = self.get_video_metadata(file_path)
                 if metadata: attributes.append(DocumentAttributeVideo(duration=metadata['duration'], w=metadata['width'], h=metadata['height'], supports_streaming=True))
             if original_caption and index == total_files:
-                truncated_caption = original_caption[:700] if download_method != "Instagram Profile" else original_caption
-                encoded_caption = base64.b64encode(truncated_caption.encode('utf-8')).decode('utf-8')
+                encoded_caption = base64.b64encode(original_caption.encode('utf-8')).decode('utf-8')
                 caption_to_group += f"\nCAPTION:{encoded_caption}"
+
             await self.app.send_file(message.chat_id, file_path, caption=caption_to_group, reply_to=message.id, attributes=attributes,
                                      progress_callback=lambda s, t: self.update_upload_status(s, t, code, index, total_files))
         except Exception as e:
-            raise e
+            if 'CAPTION_TOO_LONG' in str(e):
+                logger.warning(f"[{code}] Caption was too long. Retrying without original caption...")
+                caption_without_original = f"✅ Uploaded ({index}/{total_files})\nCODE: {code}\nSIZE: {file_size}\nMETHOD: {download_method}"
+                await self.app.send_file(message.chat_id, file_path, caption=caption_without_original, reply_to=message.id, attributes=attributes,
+                                         progress_callback=lambda s, t: self.update_upload_status(s, t, code, index, total_files))
+            else:
+                raise e
         finally:
             if os.path.exists(file_path): os.remove(file_path)
 
