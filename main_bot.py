@@ -20,6 +20,7 @@ from config import (BOT_TOKEN, BACKUP_BOT_TOKEN, GROUP_ID, DB_NAME, DB_USER, DB_
                     INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD,
                     BUTTON_TEXT, BUTTON_URL, FOOTER_TEXT, USER_COOLDOWN_SECONDS,
                     START_MESSAGE, SUBMIT_MESSAGE, FAILURE_MESSAGE,
+                    QUALITY_PROMPT_VIDEO, QUALITY_PROMPT_AUDIO,
                     AUTO_BACKUP_INTERVAL_MINUTES)
 
 # --- سیستم لاگ‌گیری ---
@@ -172,23 +173,80 @@ class AdvancedBot:
     @membership_required
     async def handle_url(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
+        url = update.message.text.strip()
+
+        if "instagram.com" in url.lower():
+            if user.id not in self.admin_ids:
+                now = datetime.now()
+                last_request_time = context.user_data.get('last_request_time')
+                cooldown = timedelta(seconds=USER_COOLDOWN_SECONDS)
+                if last_request_time and (now - last_request_time) < cooldown:
+                    remaining_time = cooldown - (now - last_request_time)
+                    await update.message.reply_text(f"⏳ برای ارسال لینک بعدی، لطفاً **{int(remaining_time.total_seconds()) + 1}** ثانیه دیگر صبر کنید.", parse_mode='Markdown')
+                    return
+                context.user_data['last_request_time'] = now
+            
+            self.db.add_user_if_not_exists(user)
+            code = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
+            self.db.add_job(code, user.id, url)
+            message_for_worker = f"⬇️ NEW JOB\nURL: {url}\nCODE: {code}\nUSER_ID: {user.id}"
+            await context.bot.send_message(chat_id=self.group_id, text=message_for_worker, message_thread_id=self.order_topic_id)
+            submit_text = SUBMIT_MESSAGE.format(code=code)
+            await update.message.reply_text(submit_text, parse_mode='Markdown')
+            return
+
+        is_audio_platform = any(platform in url.lower() for platform in ["soundcloud.com", "spotify.com"])
+        url_b64 = base64.urlsafe_b64encode(url.encode()).decode()
+
+        if is_audio_platform:
+            prompt_message = QUALITY_PROMPT_AUDIO
+            buttons = [
+                [InlineKeyboardButton("🎵 Best Quality (128k)", callback_data=f"quality_best_{url_b64}")],
+                [InlineKeyboardButton("🎶 Standard Quality (64k)", callback_data=f"quality_standard_{url_b64}")],
+            ]
+        else:
+            prompt_message = QUALITY_PROMPT_VIDEO
+            buttons = [
+                [
+                    InlineKeyboardButton("🎥 720p (HD)", callback_data=f"quality_720_{url_b64}"),
+                    InlineKeyboardButton("🎬 480p (SD)", callback_data=f"quality_480_{url_b64}"),
+                ],
+                [InlineKeyboardButton("📱 360p (Mobile)", callback_data=f"quality_360_{url_b64}")],
+            ]
+        
+        reply_markup = InlineKeyboardMarkup(buttons)
+        await update.message.reply_text(prompt_message, reply_markup=reply_markup)
+
+    async def quality_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        
+        data = query.data.split('_', 2)
+        quality_choice = data[1]
+        url_b64 = data[2]
+        url = base64.urlsafe_b64decode(url_b64.encode()).decode()
+        
+        user = query.from_user
+
         if user.id not in self.admin_ids:
             now = datetime.now()
             last_request_time = context.user_data.get('last_request_time')
             cooldown = timedelta(seconds=USER_COOLDOWN_SECONDS)
             if last_request_time and (now - last_request_time) < cooldown:
                 remaining_time = cooldown - (now - last_request_time)
-                await update.message.reply_text(f"⏳ برای ارسال لینک بعدی، لطفاً **{int(remaining_time.total_seconds()) + 1}** ثانیه دیگر صبر کنید.", parse_mode='Markdown')
+                await query.edit_message_text(text=f"⏳ برای ارسال لینک بعدی، لطفاً **{int(remaining_time.total_seconds()) + 1}** ثانیه دیگر صبر کنید.", parse_mode='Markdown')
                 return
             context.user_data['last_request_time'] = now
+            
         self.db.add_user_if_not_exists(user)
-        url = update.message.text.strip()
         code = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
         self.db.add_job(code, user.id, url)
-        message_for_worker = f"⬇️ NEW JOB\nURL: {url}\nCODE: {code}\nUSER_ID: {user.id}"
+        
+        message_for_worker = f"⬇️ NEW JOB\nURL: {url}\nCODE: {code}\nUSER_ID: {user.id}\nQUALITY: {quality_choice}"
         await context.bot.send_message(chat_id=self.group_id, text=message_for_worker, message_thread_id=self.order_topic_id)
+        
         submit_text = SUBMIT_MESSAGE.format(code=code)
-        await update.message.reply_text(submit_text, parse_mode='Markdown')
+        await query.edit_message_text(text=submit_text, parse_mode='Markdown')
 
     async def handle_failed_job(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not update.message or not update.message.text or update.message.message_thread_id != self.order_topic_id:
@@ -207,26 +265,34 @@ class AdvancedBot:
     async def handle_group_files(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not update.message or not update.message.caption or update.message.message_thread_id != self.order_topic_id:
             return
+        
         info = {}
         try:
             caption_lines = update.message.caption.split('\n')
             info = {line.split(":", 1)[0].strip(): line.split(":", 1)[1].strip() for line in caption_lines if ":" in line}
+            
             code, size, method = info.get("CODE"), int(info.get("SIZE", 0)), info.get("METHOD")
             job_info = self.db.get_job_by_code(code)
             if not job_info: return
+            
             user_id, original_url = job_info['user_id'], job_info['url']
             self.db.update_job_on_complete(code, 'completed', size)
+
             footer = f"\n\n{FOOTER_TEXT}"
+            
             async def send_media_to_user(media_type, file_id, caption_text):
                 reply_markup = None
                 if BUTTON_TEXT and BUTTON_URL:
                     keyboard = [[InlineKeyboardButton(BUTTON_TEXT, url=BUTTON_URL)]]
                     reply_markup = InlineKeyboardMarkup(keyboard)
+                
                 actions = {'video': context.bot.send_video, 'audio': context.bot.send_audio, 'photo': context.bot.send_photo, 'document': context.bot.send_document}
                 kwargs = {'chat_id': user_id, media_type: file_id, 'caption': caption_text, 'parse_mode': 'Markdown', 'reply_markup': reply_markup}
                 if media_type: await actions[media_type](**kwargs)
+            
             media_type = next((mt for mt in ['video', 'audio', 'photo', 'document'] if getattr(update.message, mt)), None)
             file_id = getattr(update.message, media_type).file_id if media_type != 'photo' else getattr(update.message, media_type)[-1].file_id
+
             if method == "Instagram Profile":
                 if not self.instagrapi_client: raise Exception("Main bot's Instagrapi client not ready.")
                 username = base64.b64decode(info["CAPTION"]).decode('utf-8').strip()
@@ -248,9 +314,11 @@ class AdvancedBot:
                 except Exception:
                     try: title = base64.b64decode(info["CAPTION"]).decode('utf-8').strip()
                     except: title = "فایل شما"
+
                 item_info_str = next((line for line in caption_lines if line.startswith("✅ Uploaded")), "")
                 match = re.search(r'\((\d+)/(\d+)\)', item_info_str)
                 slide_info = f"\n\nاسلاید {match.group(1)} از {match.group(2)}" if match else ""
+                
                 if full_description and len(full_description) > 1000:
                     short_caption = (title + slide_info + footer).strip()
                     await send_media_to_user(media_type, file_id, short_caption)
@@ -332,6 +400,7 @@ class AdvancedBot:
         self.app.add_handler(CallbackQueryHandler(self.stats_callback, pattern="^bot_stats$"))
         self.app.add_handler(CallbackQueryHandler(self.check_membership_callback, pattern="^check_membership$"))
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_url))
+        self.app.add_handler(CallbackQueryHandler(self.quality_callback, pattern="^quality_"))
         self.app.add_handler(MessageHandler((filters.VIDEO | filters.AUDIO | filters.PHOTO | filters.Document.ALL) & filters.Chat(self.group_id) & filters.CAPTION, self.handle_group_files))
         self.app.add_handler(MessageHandler(filters.TEXT & filters.Chat(self.group_id) & filters.Regex(r"^❌ JOB FAILED"), self.handle_failed_job))
         
