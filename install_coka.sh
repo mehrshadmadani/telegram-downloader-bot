@@ -77,6 +77,11 @@ print_error() { echo -e "\e[31mERROR: \$1\e[0m"; }
 print_warning() { echo -e "\e[33mWARNING: \$1\e[0m"; }
 is_running() { screen -list | grep -q "\$1"; }
 
+# Function to safely read a variable from config.py
+get_config_value() {
+    grep -oP "^\s*\$1\s*=\s*['\"]\K[^'\"]+" "\$BOT_DIR/config.py"
+}
+
 # --- Core Logic Functions ---
 start_service() {
     local service_name=\$1; local screen_name=\$2; local script_name=\$3
@@ -99,14 +104,10 @@ stop_service() {
 }
 
 update_script() {
-    local service_name=\$1
-    local script_url=\$2
-    local file_path=\$3
-    
+    local service_name=\$1; local script_url=\$2; local file_path=\$3
     print_warning "This will overwrite '\$file_path' with the latest version from GitHub."
     read -p "Are you sure? (y/n): " confirm
     if [[ "\$confirm" != "y" ]]; then print_info "Update for \$service_name cancelled."; return; fi
-    
     print_info "Updating \$service_name script..."
     curl -s -L "\$script_url?v=\$(date +%s)" -o "\$file_path"
     if [ \$? -eq 0 ]; then
@@ -123,16 +124,10 @@ update_manager() {
     print_info "Checking for new version from GitHub..."
     LATEST_VERSION=\$(curl -sL "\$VERSION_URL?v=\$(date +%s)" | head -n 1)
     if [ -z "\$LATEST_VERSION" ]; then print_error "Could not fetch latest version info."; return; fi
-    
-    if [ "\$VERSION" == "\$LATEST_VERSION" ]; then
-        print_success "You are already on the latest version (v\$VERSION)."
-        return
-    fi
-
+    if [ "\$VERSION" == "\$LATEST_VERSION" ]; then print_success "You are already on the latest version (v\$VERSION)."; return; fi
     print_warning "A new version is available: v\$LATEST_VERSION"
     read -p "Do you want to update from v\$VERSION to v\$LATEST_VERSION? (y/n): " UPDATE_CONFIRM
     if [[ "\$UPDATE_CONFIRM" != "y" ]]; then print_info "Update cancelled."; return; fi
-
     print_info "Updating 'coka' manager script itself..."
     curl -s -L "\$MANAGER_SCRIPT_URL?v=\$(date +%s)" | sudo bash
     if [ \$? -eq 0 ]; then
@@ -161,7 +156,7 @@ remove_requirements_cron() {
 
 clear_and_prepare_cookies() {
     print_warning "This will permanently delete all content in cookies.txt."
-    read -p "Are you sure you want to continue? (y/n): " confirm
+    read -p "Are you sure? (y/n): " confirm
     if [[ "\$confirm" != "y" ]]; then print_info "Operation cancelled."; return; fi
     print_info "Clearing cookies.txt..."; echo "# Netscape HTTP Cookie File" > "\$BOT_DIR/cookies.txt"; echo "# Paste new cookies here." >> "\$BOT_DIR/cookies.txt"
     print_success "cookies.txt is now clean and ready."
@@ -172,19 +167,15 @@ smart_update_config() {
     TEMP_CONFIG="/tmp/config.py.latest"; LOCAL_CONFIG="\$BOT_DIR/config.py"
     print_info "Downloading latest config template..."; curl -s -L "\$CONFIG_URL?v=\$(date +%s)" -o "\$TEMP_CONFIG"
     if [ \$? -ne 0 ] || [ ! -s "\$TEMP_CONFIG" ]; then print_error "Failed to download config template."; rm -f "\$TEMP_CONFIG"; return; fi
-    
     local_vars=\$(grep -oP '^\s*\K[A-Z_]+(?=\s*=)' "\$LOCAL_CONFIG"); remote_vars=\$(grep -oP '^\s*\K[A-Z_]+(?=\s*=)' "\$TEMP_CONFIG")
     missing_vars=\$(comm -13 <(echo "\$local_vars" | sort) <(echo "\$remote_vars" | sort))
-    
     if [ -z "\$missing_vars" ]; then print_success "Your config.py is already up to date."; rm -f "\$TEMP_CONFIG"; return; fi
-
     echo "" >> "\$LOCAL_CONFIG"; echo "# === Auto-added variables from Smart Update ===" >> "\$LOCAL_CONFIG"; ADDED_COUNT=0
     for var in \$missing_vars; do
         print_info "New variable found: '\$var'. Adding to config.py..."
         awk -v var="^\$var\s*=" '/\s*# ---.*---/,/^\s*\$/ { if (\$0 ~ var) p=1; if (p) print; if (p && \$0 ~ /^\s*\$/) p=0 }' "\$TEMP_CONFIG" >> "\$LOCAL_CONFIG"
         echo "" >> "\$LOCAL_CONFIG"; ADDED_COUNT=\$((ADDED_COUNT + 1))
     done
-    
     print_success "\$ADDED_COUNT new variable(s) added."; print_warning "Please edit the file to set their values."
     rm -f "\$TEMP_CONFIG"
 }
@@ -200,7 +191,8 @@ quick_update_config() {
 install_database() {
     if command -v psql &> /dev/null; then print_warning "PostgreSQL is already installed."; return; fi
     print_info "Installing PostgreSQL..."; apt-get update -y; apt-get install -y postgresql postgresql-contrib
-    print_info "Creating database user and database..."; source "\$BOT_DIR/config.py"
+    print_info "Creating database user and database..."
+    DB_NAME=\$(get_config_value "DB_NAME"); DB_USER=\$(get_config_value "DB_USER"); DB_PASS=\$(get_config_value "DB_PASS")
     sudo -u postgres psql -c "CREATE DATABASE \$DB_NAME;"
     sudo -u postgres psql -c "CREATE USER \$DB_USER WITH PASSWORD '\$DB_PASS';"
     sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE \$DB_NAME TO \$DB_USER;"
@@ -211,9 +203,10 @@ install_database() {
     print_success "Database installed and configured."
 }
 
-show_db_tables() {
-    print_info "Tables in database..."; source "\$BOT_DIR/config.py"
-    export PGPASSWORD=\$DB_PASS; psql -U "\$DB_USER" -d "\$DB_NAME" -h "\$DB_HOST" -c "\dt"; export PGPASSWORD=""
+show_db_users() {
+    print_info "Users in database..."
+    DB_NAME=\$(get_config_value "DB_NAME"); DB_USER=\$(get_config_value "DB_USER"); DB_PASS=\$(get_config_value "DB_PASS"); DB_HOST=\$(get_config_value "DB_HOST")
+    export PGPASSWORD=\$DB_PASS; psql -U "\$DB_USER" -d "\$DB_NAME" -h "\$DB_HOST" -c "SELECT user_id, first_name, username FROM users ORDER BY join_date DESC LIMIT 20;"; export PGPASSWORD=""
 }
 
 restore_db_from_backup() {
@@ -223,7 +216,8 @@ restore_db_from_backup() {
     if [ ! -f "\$backup_file" ]; then print_error "Backup file not found."; return; fi
     print_error "!!! WARNING !!! This will DESTROY the current database."; read -p "Type 'YES' to confirm: " confirm_destroy
     if [[ "\$confirm_destroy" != "YES" ]]; then print_info "Restore cancelled."; return; fi
-    print_info "Restoring database..."; source "\$BOT_DIR/config.py"
+    print_info "Restoring database..."
+    DB_NAME=\$(get_config_value "DB_NAME"); DB_USER=\$(get_config_value "DB_USER"); DB_PASS=\$(get_config_value "DB_PASS"); DB_HOST=\$(get_config_value "DB_HOST")
     export PGPASSWORD=\$DB_PASS
     dropdb -U "\$DB_USER" -h "\$DB_HOST" "\$DB_NAME"
     createdb -U "\$DB_USER" -h "\$DB_HOST" "\$DB_NAME"
@@ -301,9 +295,9 @@ config_menu() {
 
 database_menu() {
     while true; do
-        show_panel_and_menu; echo "  Database Manager:"; echo "  [1] Install PostgreSQL & Setup"; echo "  [2] Show Tables"; echo "  [3] Restore from Backup"; echo "  [0] Back"
+        show_panel_and_menu; echo "  Database Manager:"; echo "  [1] Install PostgreSQL & Setup"; echo "  [2] Show Bot Users List"; echo "  [3] Restore from Backup"; echo "  [0] Back"
         read -p "  Enter your choice: " choice
-        case \$choice in 1) install_database ;; 2) show_db_tables ;; 3) restore_db_from_backup ;; 0) return ;; *) print_error "Invalid." ;; esac
+        case \$choice in 1) install_database ;; 2) show_db_users ;; 3) restore_db_from_backup ;; 0) return ;; *) print_error "Invalid." ;; esac
         echo; read -p "Press [Enter] to continue..."
     done
 }
