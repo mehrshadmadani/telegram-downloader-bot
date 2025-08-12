@@ -20,7 +20,10 @@ from config import (TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_PHONE,
                     GROUP_ID, ORDER_TOPIC_ID, MAJID_API_TOKEN,
                     INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD, NESTCODE_API_KEY)
 
-# --- سیستم لاگ‌گیری ---
+# --- Version ---
+VERSION = "35.0 (Final Version)"
+
+# --- Logging Setup ---
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - [%(funcName)s] - %(message)s')
@@ -237,8 +240,7 @@ class TelethonWorker:
             downloaded_files = [os.path.join(self.download_dir, f) for f in os.listdir(self.download_dir) if f.startswith(code)]
             if not downloaded_files: raise Exception("yt-dlp finished but no files were found.")
             
-            # For non-insta, caption is always title. Main bot will fetch description.
-            caption = info_dict.get('title', '') if info_dict else ""
+            caption = info_dict.get('description', info_dict.get('title', '')) if info_dict else ""
             return downloaded_files, caption, "yt-dlp"
         except Exception as e:
             logger.error(f"[{code}] Error in download_other_platforms: {e}", exc_info=True)
@@ -267,7 +269,6 @@ class TelethonWorker:
             if original_caption and index == total_files:
                 encoded_caption = base64.b64encode(original_caption.encode('utf-8')).decode('utf-8')
                 caption_to_group += f"\nCAPTION:{encoded_caption}"
-
             await self.app.send_file(message.chat_id, file_path, caption=caption_to_group, reply_to=message.id, attributes=attributes,
                                      progress_callback=lambda s, t: self.update_upload_status(s, t, code, index, total_files))
         except Exception as e:
@@ -340,7 +341,7 @@ class TelethonWorker:
     async def display_dashboard(self):
         while True:
             os.system('clear' if os.name == 'posix' else 'cls')
-            print("--- 🚀 Advanced Downloader Dashboard (Final) 🚀 ---")
+            print(f"--- 🚀 Advanced Downloader Dashboard (v{VERSION}) 🚀 ---")
             print(f"{'Job Code':<12} | {'User ID':<12} | {'Status':<50}")
             print("-" * 80)
             if not self.active_jobs: print("... Waiting for new jobs ...")
@@ -359,7 +360,7 @@ class TelethonWorker:
         try:
             await self.app.start(phone=self.phone)
             me = await self.app.get_me()
-            logger.info(f"Worker (Final) successfully logged in as {me.first_name}")
+            logger.info(f"✅ Worker v{VERSION} successfully logged in as {me.first_name}")
         except Exception as e:
             logger.critical(f"Could not start the worker. Error: {e}")
             return
@@ -378,6 +379,6 @@ class TelethonWorker:
                 await asyncio.sleep(30)
 
 if __name__ == "__main__":
-    logger.info("--- Starting Final Worker ---")
+    logger.info(f"--- Starting Worker v{VERSION} ---")
     worker = TelethonWorker(TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_PHONE)
     asyncio.run(worker.run())
