@@ -5,7 +5,6 @@ import string
 import base64
 import re
 import logging
-import subprocess
 from functools import wraps
 from datetime import datetime, timedelta
 import yt_dlp
