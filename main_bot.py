@@ -23,7 +23,10 @@ from config import (BOT_TOKEN, BACKUP_BOT_TOKEN, GROUP_ID, DB_NAME, DB_USER, DB_
                     QUALITY_PROMPT_VIDEO, QUALITY_PROMPT_AUDIO,
                     AUTO_BACKUP_INTERVAL_MINUTES)
 
-# --- سیستم لاگ‌گیری ---
+# --- Version ---
+VERSION = "35.0 (Final Version)"
+
+# --- Logging Setup ---
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - [%(funcName)s] - %(message)s')
@@ -300,14 +303,14 @@ class AdvancedBot:
                 await send_media_to_user('photo', file_id, full_caption)
             else:
                 full_description, title = decoded_caption, decoded_caption
-                if "youtube.com" in original_url or "youtu.be" in original_url:
+                if "youtube.com" in original_url or "youtu.be" in original_url or "soundcloud.com" in original_url or "spotify.com" in original_url:
                     try:
                         with yt_dlp.YoutubeDL({'quiet': True, 'ignoreerrors': True, 'cookiefile': 'cookies.txt'}) as ydl:
                             meta = ydl.extract_info(original_url, download=False)
                             if meta:
                                 full_description, title = meta.get('description', ''), meta.get('title', '')
                     except Exception:
-                        title = decoded_caption # Fallback to title from worker
+                        title = decoded_caption
                 
                 item_info_str = next((line for line in caption_lines if line.startswith("✅ Uploaded")), "")
                 match = re.search(r'\((\d+)/(\d+)\)', item_info_str)
@@ -407,7 +410,7 @@ class AdvancedBot:
         else:
             logger.info("ℹ️ Auto backup is disabled.")
 
-        logger.info("🚀 Main Bot is running...")
+        logger.info(f"🚀 Main Bot v{VERSION} is running...")
         self.app.run_polling()
 
 if __name__ == "__main__":
