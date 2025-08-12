@@ -24,7 +24,8 @@ from config import (TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_PHONE,
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - [%(funcName)s] - %(message)s')
-if logger.hasHandlers(): logger.handlers.clear()
+if logger.hasHandlers():
+    logger.handlers.clear()
 stream_handler = logging.StreamHandler()
 stream_handler.setFormatter(formatter)
 logger.addHandler(stream_handler)
@@ -52,7 +53,8 @@ class TelethonWorker:
         try:
             client = InstagrapiClient()
             session_file = f"instagrapi_session_{INSTAGRAM_USERNAME}.json"
-            if os.path.exists(session_file): client.load_settings(session_file)
+            if os.path.exists(session_file):
+                client.load_settings(session_file)
             client.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
             client.dump_settings(session_file)
             logger.info("✅ Instagrapi session loaded/created successfully.")
@@ -80,7 +82,8 @@ class TelethonWorker:
         with requests.get(url, stream=True, timeout=300) as r:
             r.raise_for_status()
             with open(file_path, 'wb') as f:
-                for chunk in r.iter_content(chunk_size=8192): f.write(chunk)
+                for chunk in r.iter_content(chunk_size=8192):
+                    f.write(chunk)
         return file_path
 
     def _try_instagrapi_post(self, url, code):
@@ -125,7 +128,7 @@ class TelethonWorker:
 
     def _try_yt_dlp_insta(self, url, code):
         logger.info(f"[{code}] Attempt 3: yt-dlp for Instagram")
-        return self.download_other_platforms(url, code)
+        return self.download_other_platforms(url, code, "best") # Use a default quality for insta fallback
 
     def _try_majidapi(self, url, code):
         logger.info(f"[{code}] Attempt 4: MajidAPI")
@@ -205,15 +208,31 @@ class TelethonWorker:
         elif d['status'] == 'finished':
             if code in self.active_jobs: self.active_jobs[code]["status"] = "Download Finished, Merging..."
 
-    def download_other_platforms(self, url, code):
+    def download_other_platforms(self, url, code, quality="best"):
         try:
-            logger.info(f"[{code}] Starting download for URL: {url}")
+            logger.info(f"[{code}] Starting download for URL: {url} with quality '{quality}'")
             output_path = os.path.join(self.download_dir, f"{code}.%(ext)s")
-            ydl_opts = {'outtmpl': output_path, 'cookiefile': 'cookies.txt', 'ignoreerrors': True, 
-                        'no_warnings': True, 'quiet': True,
-                        'format': 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best',
-                        'merge_output_format': 'mp4',
-                        'progress_hooks': [partial(self.yt_dlp_progress_hook, code=code)]}
+            
+            format_selector = 'best'
+            postprocessors = []
+
+            if quality in ["720", "480", "360"]:
+                format_selector = f'bestvideo[height<={quality}][ext=mp4]+bestaudio[ext=m4a]/best[height<={quality}][ext=mp4]/best'
+            elif quality == "best": # For audio
+                format_selector = 'bestaudio/best'
+                postprocessors = [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '128'}]
+            elif quality == "standard": # For audio
+                format_selector = 'bestaudio/best'
+                postprocessors = [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '64'}]
+
+            ydl_opts = {
+                'outtmpl': output_path, 'cookiefile': 'cookies.txt', 'ignoreerrors': True, 
+                'no_warnings': True, 'quiet': True,
+                'format': format_selector,
+                'postprocessors': postprocessors,
+                'merge_output_format': 'mp4',
+                'progress_hooks': [partial(self.yt_dlp_progress_hook, code=code)],
+            }
             with yt_dlp.YoutubeDL(ydl_opts) as ydl: info_dict = ydl.extract_info(url, download=True)
             downloaded_files = [os.path.join(self.download_dir, f) for f in os.listdir(self.download_dir) if f.startswith(code)]
             if not downloaded_files: raise Exception("yt-dlp finished but no files were found.")
@@ -244,7 +263,7 @@ class TelethonWorker:
                 metadata = self.get_video_metadata(file_path)
                 if metadata: attributes.append(DocumentAttributeVideo(duration=metadata['duration'], w=metadata['width'], h=metadata['height'], supports_streaming=True))
             if original_caption and index == total_files:
-                truncated_caption = original_caption[:700]
+                truncated_caption = original_caption[:700] if download_method != "Instagram Profile" else original_caption
                 encoded_caption = base64.b64encode(truncated_caption.encode('utf-8')).decode('utf-8')
                 caption_to_group += f"\nCAPTION:{encoded_caption}"
             await self.app.send_file(message.chat_id, file_path, caption=caption_to_group, reply_to=message.id, attributes=attributes,
@@ -260,12 +279,15 @@ class TelethonWorker:
             self.active_jobs[code]["status"] = f"Uploading {index}/{total_files}: {percentage}%"
     
     async def process_job(self, message):
-        code, url, user_id = "N/A", "N/A", 0
+        code, url, user_id, quality = "N/A", "N/A", 0, "best"
         try:
             lines = message.text.split('\n')
             url = next(l.split(":", 1)[1].strip() for l in lines if l.startswith("URL:"))
             code = next(l.split(":", 1)[1].strip() for l in lines if l.startswith("CODE:"))
             user_id = int(next(l.split(":", 1)[1].strip() for l in lines if l.startswith("USER_ID:")))
+            quality_line = next((l for l in lines if l.startswith("QUALITY:")), None)
+            if quality_line: quality = quality_line.split(":", 1)[1].strip()
+            
             self.active_jobs[code] = {"user_id": user_id, "status": "Queued", "error": None}
             logger.info(f"[{code}] Job received for user [{user_id}].")
             
@@ -286,8 +308,11 @@ class TelethonWorker:
                     self.active_jobs[code]["status"] = "Fetching (Insta Profile)..."
                     file_paths, caption_text, method = await asyncio.to_thread(self.download_instagram_profile, url, code)
             else:
-                file_paths, caption_text, method = await asyncio.to_thread(self.download_other_platforms, url, code)
+                file_paths, caption_text, method = await asyncio.to_thread(self.download_other_platforms, url, code, quality)
             
+            if not file_paths:
+                raise Exception("All download methods failed.")
+
             if code in self.active_jobs: self.active_jobs[code]["status"] = "Processing..."
             for i, path in enumerate(file_paths):
                 await self.upload_single_file(message, path, code, method, i + 1, len(file_paths), caption_text)
