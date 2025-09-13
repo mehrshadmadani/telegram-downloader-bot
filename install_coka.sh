@@ -78,7 +78,9 @@ print_warning() { echo -e "\e[33mWARNING: \$1\e[0m"; }
 is_running() { screen -list | grep -q "\$1"; }
 
 get_config_value() {
-    grep -oP "^\s*\$1\s*=\s*['\"]\K[^'\"]+" "\$BOT_DIR/config.py"
+    # Searches for a variable in a given config file
+    # Usage: get_config_value "VAR_NAME" "/path/to/config.py"
+    grep -oP "^\s*\$1\s*=\s*['\"]\K[^'\"]+" "\$2"
 }
 
 # --- Core Logic Functions ---
@@ -188,55 +190,143 @@ quick_update_config() {
 }
 
 install_database() {
-    if command -v psql &> /dev/null; then print_warning "PostgreSQL is already installed."; return; fi
-    print_info "Installing PostgreSQL..."; apt-get update -y; apt-get install -y postgresql postgresql-contrib
-    print_info "Creating database user and database..."
-    DB_NAME=\$(get_config_value "DB_NAME"); DB_USER=\$(get_config_value "DB_USER"); DB_PASS=\$(get_config_value "DB_PASS")
-    sudo -u postgres psql -c "CREATE DATABASE \$DB_NAME;"
-    sudo -u postgres psql -c "CREATE USER \$DB_USER WITH PASSWORD '\$DB_PASS';"
+    if command -v psql &> /dev/null; then 
+        print_warning "PostgreSQL client appears to be installed."
+    else
+        print_info "Installing PostgreSQL..."; 
+        apt-get update -y > /dev/null 2>&1
+        apt-get install -y postgresql postgresql-contrib > /dev/null 2>&1
+        print_success "PostgreSQL installed."
+    fi
+    
+    print_info "Creating database user and database from config.py..."
+    DB_NAME=\$(get_config_value "DB_NAME" "\$BOT_DIR/config.py"); DB_USER=\$(get_config_value "DB_USER" "\$BOT_DIR/config.py"); DB_PASS=\$(get_config_value "DB_PASS" "\$BOT_DIR/config.py")
+
+    if sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='\$DB_NAME'" | grep -q 1; then
+        print_warning "Database '\$DB_NAME' already exists."
+    else
+        sudo -u postgres psql -c "CREATE DATABASE \$DB_NAME;"
+        print_success "Database '\$DB_NAME' created."
+    fi
+
+    if sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='\$DB_USER'" | grep -q 1; then
+        print_warning "User '\$DB_USER' already exists."
+    else
+        sudo -u postgres psql -c "CREATE USER \$DB_USER WITH PASSWORD '\$DB_PASS';"
+        print_success "User '\$DB_USER' created."
+    fi
+    
     sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE \$DB_NAME TO \$DB_USER;"
-    PG_VERSION=\$(psql -V | egrep -o '[0-9]{2}' | head -1)
+    print_success "Privileges granted."
+    
+    PG_VERSION=\$(psql -V | egrep -o '[0-9]{1,2}' | head -1)
     PG_HBA_PATH="/etc/postgresql/\$PG_VERSION/main/pg_hba.conf"
-    echo "local   \$DB_NAME   \$DB_USER   scram-sha-256" | sudo tee -a "\$PG_HBA_PATH" > /dev/null
-    sudo systemctl restart postgresql
-    print_success "Database installed and configured."
+    if grep -q "local\s*\$DB_NAME\s*\$DB_USER" "\$PG_HBA_PATH"; then
+        print_warning "pg_hba.conf already configured for this user/db."
+    else
+        echo "local   \$DB_NAME   \$DB_USER   scram-sha-256" | sudo tee -a "\$PG_HBA_PATH" > /dev/null
+        print_info "Updated pg_hba.conf, restarting PostgreSQL..."
+        sudo systemctl restart postgresql
+    fi
+    print_success "Database is ready."
 }
 
 show_db_users() {
     print_info "Showing last 20 users from database..."
-    DB_NAME=\$(get_config_value "DB_NAME"); DB_USER=\$(get_config_value "DB_USER"); DB_PASS=\$(get_config_value "DB_PASS"); DB_HOST=\$(get_config_value "DB_HOST")
+    DB_NAME=\$(get_config_value "DB_NAME" "\$BOT_DIR/config.py"); DB_USER=\$(get_config_value "DB_USER" "\$BOT_DIR/config.py"); DB_PASS=\$(get_config_value "DB_PASS" "\$BOT_DIR/config.py"); DB_HOST=\$(get_config_value "DB_HOST" "\$BOT_DIR/config.py")
     export PGPASSWORD=\$DB_PASS; psql -U "\$DB_USER" -d "\$DB_NAME" -h "\$DB_HOST" -c "SELECT user_id, first_name, username FROM users ORDER BY join_date DESC LIMIT 20;"; export PGPASSWORD=""
 }
 
-restore_db_from_backup() {
-    local backup_file="\$BOT_DIR/restore_backup.sql"
-    print_warning "Ensure your backup file is at: \$backup_file"; read -p "Press [Enter] when ready, or 'c' to cancel: " confirm
-    if [[ "\$confirm" == "c" ]]; then print_info "Restore cancelled."; return; fi
-    if [ ! -f "\$backup_file" ]; then print_error "Backup file not found."; return; fi
-    print_error "!!! WARNING !!! This will DESTROY the current database."; read -p "Type 'YES' to confirm: " confirm_destroy
-    if [[ "\$confirm_destroy" != "YES" ]]; then print_info "Restore cancelled."; return; fi
-    print_info "Restoring database..."
-    DB_NAME=\$(get_config_value "DB_NAME"); DB_USER=\$(get_config_value "DB_USER"); DB_PASS=\$(get_config_value "DB_PASS"); DB_HOST=\$(get_config_value "DB_HOST")
+# --- START: NEW SMART RESTORE FUNCTION ---
+restore_bot_from_backup() {
+    print_info "--- Smart Restore Bot & DB from Backup ---"
+    read -p "Enter the full path of the backup file (.tar.gz): " backup_path
+    if [ ! -f "\$backup_path" ]; then
+        print_error "Backup file not found at: \$backup_path"
+        return
+    fi
+
+    read -p "Enter the full path of the destination directory to extract to: " dest_path
+    if [ -d "\$dest_path" ] && [ "\$(ls -A \$dest_path)" ]; then
+        print_warning "Destination directory '\$dest_path' is not empty."
+        read -p "Are you sure you want to extract into it? (y/n): " confirm_extract
+        if [[ "\$confirm_extract" != "y" ]]; then
+            print_info "Restore cancelled."
+            return
+        fi
+    fi
+    mkdir -p "\$dest_path"
+
+    print_info "Extracting backup file..."
+    tar -xzvf "\$backup_path" -C "\$dest_path" --strip-components=1
+    if [ \$? -ne 0 ]; then
+        print_error "Failed to extract the backup file."
+        return
+    fi
+    print_success "Bot files extracted successfully to \$dest_path"
+
+    local sql_file=\$(find "\$dest_path" -maxdepth 1 -name "*.sql" -type f | head -n 1)
+    if [ -z "\$sql_file" ]; then
+        print_warning "No .sql file found in the backup archive. Skipping database restore."
+        return
+    fi
+    print_info "Database backup file found: \$sql_file"
+
+    if ! command -v psql &> /dev/null; then
+        print_error "PostgreSQL client is not installed. Database cannot be restored."
+        print_info "Please run 'coka db' and select 'Install PostgreSQL' first."
+        return
+    fi
+
+    print_error "!!! WARNING !!! The next step will DESTROY the current database and replace it with the backup."
+    read -p "Are you sure you want to proceed with database restoration? (y/n): " confirm_db
+    if [[ "\$confirm_db" != "y" ]]; then
+        print_info "Database restore cancelled. Bot files remain extracted."
+        return
+    fi
+
+    print_info "Reading database credentials from the newly extracted config.py..."
+    local new_config_file="\$dest_path/config.py"
+    if [ ! -f "\$new_config_file" ]; then
+        print_error "config.py not found in the extracted directory. Cannot restore database."
+        return
+    fi
+    
+    DB_NAME=\$(get_config_value "DB_NAME" "\$new_config_file")
+    DB_USER=\$(get_config_value "DB_USER" "\$new_config_file")
+    DB_PASS=\$(get_config_value "DB_PASS" "\$new_config_file")
+    DB_HOST=\$(get_config_value "DB_HOST" "\$new_config_file")
+    
+    print_info "Attempting to restore database '\$DB_NAME' for user '\$DB_USER'..."
     export PGPASSWORD=\$DB_PASS
-    dropdb -U "\$DB_USER" -h "\$DB_HOST" "\$DB_NAME"
+    dropdb --if-exists -U "\$DB_USER" -h "\$DB_HOST" "\$DB_NAME"
     createdb -U "\$DB_USER" -h "\$DB_HOST" "\$DB_NAME"
-    psql -U "\$DB_USER" -d "\$DB_NAME" -h "\$DB_HOST" < "\$backup_file"
+    psql -U "\$DB_USER" -d "\$DB_NAME" -h "\$DB_HOST" -f "\$sql_file"
     export PGPASSWORD=""
-    if [ \$? -eq 0 ]; then print_success "Database restored."; else print_error "Error during restore."; fi
+    
+    if [ \$? -eq 0 ]; then
+        print_success "Database restored successfully."
+        print_info "Restore complete! Remember to:"
+        echo "  1. Set the new bot directory in the Coka manager if it's different ('coka update-manager')."
+        echo "  2. Install Python requirements in the new directory ('cd \$dest_path && pip install -r requirements.txt')."
+        echo "  3. Start the bots from the new directory."
+    else
+        print_error "An error occurred during database restoration."
+    fi
 }
+# --- END: NEW SMART RESTORE FUNCTION ---
 
 delete_database_data() {
     print_error "!!! WARNING !!! This will permanently delete ALL users and jobs from the database."
     read -p "This cannot be undone. Are you sure? (y/n): " confirm
     if [[ "\$confirm" != "y" ]]; then print_info "Operation cancelled."; return; fi
     print_info "Deleting and recreating tables..."
-    DB_NAME=\$(get_config_value "DB_NAME"); DB_USER=\$(get_config_value "DB_USER"); DB_PASS=\$(get_config_value "DB_PASS"); DB_HOST=\$(get_config_value "DB_HOST")
+    DB_NAME=\$(get_config_value "DB_NAME" "\$BOT_DIR/config.py"); DB_USER=\$(get_config_value "DB_USER" "\$BOT_DIR/config.py"); DB_PASS=\$(get_config_value "DB_PASS" "\$BOT_DIR/config.py"); DB_HOST=\$(get_config_value "DB_HOST" "\$BOT_DIR/config.py")
     export PGPASSWORD=\$DB_PASS
-    psql -U "\$DB_USER" -d "\$DB_NAME" -h "\$DB_HOST" -c "DROP TABLE IF EXISTS jobs; DROP TABLE IF EXISTS users;"
-    psql -U "\$DB_USER" -d "\$DB_NAME" -h "\$DB_HOST" -c "CREATE TABLE users (user_id BIGINT PRIMARY KEY, first_name TEXT, username TEXT, join_date TIMESTAMP WITH TIME ZONE DEFAULT NOW());"
-    psql -U "\$DB_USER" -d "\$DB_NAME" -h "\$DB_HOST" -c "CREATE TABLE jobs (id SERIAL PRIMARY KEY, code TEXT UNIQUE NOT NULL, user_id BIGINT REFERENCES users(user_id), url TEXT NOT NULL, status TEXT DEFAULT 'pending', created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), completed_at TIMESTAMP WITH TIME ZONE, file_size BIGINT);"
+    psql -U "\$DB_USER" -d "\$DB_NAME" -h "\$DB_HOST" -c "DROP TABLE IF EXISTS uploader_clicks, uploader_files, broadcast_messages, broadcast_history, uploader_links, general_settings, tutorial_texts, youtube_quality_settings, cached_files, jobs, users;"
     export PGPASSWORD=""
-    print_success "Database tables have been wiped and recreated."
+    print_success "All bot-related tables have been dropped."
+    print_warning "Start the main bot once to allow it to recreate all tables automatically."
 }
 
 uninstall_postgresql() {
@@ -244,7 +334,8 @@ uninstall_postgresql() {
     read -p "This is a highly destructive action. Are you absolutely sure? (Type 'YES' to confirm): " confirm
     if [[ "\$confirm" != "YES" ]]; then print_info "Operation cancelled."; return; fi
     print_info "Stopping PostgreSQL service..."; systemctl stop postgresql
-    print_info "Purging PostgreSQL packages..."; apt-get purge -y postgresql postgresql-common postgresql-client; apt-get autoremove -y
+    print_info "Purging PostgreSQL packages..."; apt-get purge -y postgresql* postgresql-common; apt-get autoremove -y
+    print_info "Removing configuration files..."; rm -rf /etc/postgresql/ /var/lib/postgresql/
     print_success "PostgreSQL has been completely removed from the server."
 }
 
@@ -281,7 +372,7 @@ worker_menu() {
     while true; do
         show_panel_and_menu; echo "  Worker Manager Menu:"; echo "  [1] Start/Restart [2] Stop [3] Live Dashboard [4] Log File [5] Update [0] Back"
         read -p "  Enter your choice: " choice
-        case \$choice in 1) start_service "worker" "\$WORKER_SCREEN_NAME" "advanced_worker.py";; 2) stop_service "worker" "\$WORKER_SCREEN_NAME" ;; 3) screen -r "\$WORKER_SCREEN_NAME" ;; 4) tail -f bot.log ;; 5) update_script "worker" "\$WORKER_SCRIPT_URL" "\$BOT_DIR/advanced_worker.py" ;; 0) return ;; *) print_error "Invalid." ;; esac
+        case \$choice in 1) start_service "worker" "\$WORKER_SCREEN_NAME" "advanced_worker.py";; 2) stop_service "worker" "\$WORKER_SCREEN_NAME" ;; 3) screen -r "\$WORKER_SCREEN_NAME" ;; 4) tail -f worker.log ;; 5) update_script "worker" "\$WORKER_SCRIPT_URL" "\$BOT_DIR/advanced_worker.py" ;; 0) return ;; *) print_error "Invalid." ;; esac
         echo; read -p "Press [Enter] to continue..."
     done
 }
@@ -324,9 +415,9 @@ config_menu() {
 
 database_menu() {
     while true; do
-        show_panel_and_menu; echo "  Database Manager:"; echo "  [1] Install PostgreSQL & Setup"; echo "  [2] Show Bot Users List"; echo "  [3] Restore from Backup"; echo "  [4] Delete Database Data"; echo "  [5] Uninstall PostgreSQL"; echo "  [0] Back"
+        show_panel_and_menu; echo "  Database Manager:"; echo "  [1] Install PostgreSQL & Setup"; echo "  [2] Show Bot Users List"; echo "  [3] Smart Restore from Backup (.tar.gz)"; echo "  [4] Delete ALL Bot Data"; echo "  [5] UNINSTALL PostgreSQL"; echo "  [0] Back"
         read -p "  Enter your choice: " choice
-        case \$choice in 1) install_database ;; 2) show_db_users ;; 3) restore_db_from_backup ;; 4) delete_database_data ;; 5) uninstall_postgresql ;; 0) return ;; *) print_error "Invalid." ;; esac
+        case \$choice in 1) install_database ;; 2) show_db_users ;; 3) restore_bot_from_backup ;; 4) delete_database_data ;; 5) uninstall_postgresql ;; 0) return ;; *) print_error "Invalid." ;; esac
         echo; read -p "Press [Enter] to continue..."
     done
 }
@@ -351,7 +442,16 @@ main_menu() {
 }
 
 # --- Main Script ---
-cd "\$BOT_DIR" || { print_error "Directory not found: \$BOT_DIR"; exit 1; }
+# Change to the bot directory defined during install. If it fails, exit.
+cd "\$BOT_DIR" 2>/dev/null || { 
+    # Fallback for first run or if directory moved.
+    if [ -d "/root/telegram-downloader-bot" ]; then
+        cd "/root/telegram-downloader-bot"
+    else
+       print_error "Bot directory '\$BOT_DIR' not found. Please edit the script at /usr/local/bin/coka or reinstall."
+       exit 1
+    fi
+}
 main_menu
 EOF
 
